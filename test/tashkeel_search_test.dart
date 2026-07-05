@@ -184,4 +184,28 @@ void main() {
       });
     });
   });
+
+  group('matchTightness — relevance score used to rank search results', () {
+    test('a full-text match scores 1.0', () {
+      expect(matchTightness(0, 5, 'ابجدة'), 1.0);
+    });
+
+    test('a match covering less of the text scores lower', () {
+      final tight = matchTightness(0, 3, 'ابجدة'); // 3/5
+      final loose = matchTightness(0, 3, 'ابجدةوهكذا'); // 3/10, same span
+      expect(tight, greaterThan(loose));
+    });
+
+    test('a tighter match ranks above a looser one containing it', () {
+      // Same query substring found in a short line vs. a much longer one:
+      // the short/near-exact hit should score higher.
+      final short = matchTightness(0, 4, 'قالوا');
+      final long = matchTightness(10, 14, 'وقفت أطلال الديار وقالوا لنا');
+      expect(short, greaterThan(long));
+    });
+
+    test('empty text scores 0 (no division by zero)', () {
+      expect(matchTightness(0, 0, ''), 0);
+    });
+  });
 }

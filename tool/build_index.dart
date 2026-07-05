@@ -13,6 +13,10 @@
 //   * `lines_fts`        — an FTS5 *trigram* index over `lines.plain` (external
 //                          content) enabling fast substring `LIKE` lookups.
 //   * `poem.line_count`  — per-poem line count, so counts are a column read.
+//   * `poem.title_plain` — stripAll(title), the same coarse-filter key for
+//                          title search. No FTS needed: `poem` is small enough
+//                          (hundreds of thousands, not millions, of rows) for a
+//                          bounded `LIKE` scan to stay fast on its own.
 //   * indexes on `lines(poem_id)` and `poem(poet)`.
 //
 // Requires the bundled SQLite (via sqflite_common_ffi, already a dependency) to
@@ -31,7 +35,12 @@ Future<void> main(List<String> args) async {
   // Resolve to an absolute path: sqflite_common_ffi otherwise interprets a
   // relative path under its own `.dart_tool/.../databases` directory and would
   // silently create an empty database there instead of opening this file.
-  final dbPath = File(args.isNotEmpty ? args.first : 'assets/test.db').absolute.path;
+  final flags = args.where((a) => a.startsWith('--')).toSet();
+  final positional = args.where((a) => !a.startsWith('--')).toList();
+  final dbPath =
+      File(positional.isNotEmpty ? positional.first : 'assets/test.db')
+          .absolute
+          .path;
   if (!File(dbPath).existsSync()) {
     stderr.writeln('Database not found: $dbPath');
     exitCode = 1;
@@ -42,13 +51,29 @@ Future<void> main(List<String> args) async {
   final db = await databaseFactoryFfi.openDatabase(dbPath);
   try {
     final sw = Stopwatch()..start();
+
+    // Fast path: backfill only `poem.title_plain` (349K rows) without touching
+    // the already-built line index / FTS / VACUUM. Use when a DB was indexed by
+    // an older build that predated title search.
+    if (flags.contains('--title-plain-only')) {
+      print('Backfilling title_plain in $dbPath …');
+      await _populateTitlePlain(db);
+      await db.execute('ANALYZE');
+      print('title_plain backfilled in ${sw.elapsed.inSeconds}s.');
+      return;
+    }
+
     print('Building search index in $dbPath …');
 
     await _addPlainColumn(db);
     await _populatePlain(db);
     await _buildFts(db);
-    await _populateLineCounts(db);
+    // Indexes (notably lines(poem_id)) must exist before the per-poem count
+    // query below, or that correlated subquery falls back to a full scan of
+    // `lines` for every one of the ~349K poems instead of an indexed lookup.
     await _ensureIndexes(db);
+    await _populateLineCounts(db);
+    await _populateTitlePlain(db);
 
     print('Compacting (VACUUM + ANALYZE) …');
     await db.execute('VACUUM');
@@ -118,6 +143,31 @@ Future<void> _populateLineCounts(Database db) async {
     'UPDATE poem SET line_count = '
     '(SELECT COUNT(*) FROM lines WHERE lines.poem_id = poem.id)',
   );
+}
+
+Future<void> _populateTitlePlain(Database db) async {
+  print('Normalizing poem titles into `title_plain` …');
+  if (!await _hasColumn(db, 'poem', 'title_plain')) {
+    await db.execute('ALTER TABLE poem ADD COLUMN title_plain TEXT');
+  }
+
+  var lastId = 0;
+  while (true) {
+    final rows = await db.rawQuery(
+      'SELECT id, title FROM poem WHERE id > ? ORDER BY id LIMIT ?',
+      [lastId, _batchSize],
+    );
+    if (rows.isEmpty) break;
+
+    final batch = db.batch();
+    for (final row in rows) {
+      final id = row['id'] as int;
+      final plain = stripAll((row['title'] as String?) ?? '');
+      batch.rawUpdate('UPDATE poem SET title_plain = ? WHERE id = ?', [plain, id]);
+      lastId = id;
+    }
+    await batch.commit(noResult: true);
+  }
 }
 
 Future<void> _ensureIndexes(Database db) async {

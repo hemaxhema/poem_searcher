@@ -294,6 +294,14 @@ CoarseProbe coarseProbe(String query) {
   return (start: start, end: end);
 }
 
+/// Relevance score for a confirmed match: the fraction of [text] the match
+/// span `[start, end)` covers. A match spanning most/all of the text (a
+/// near-exact hit) ranks above the same substring buried in much longer text.
+/// Used to order confirmed search results by tightness rather than arbitrary
+/// database scan order.
+double matchTightness(int start, int end, String text) =>
+    text.isEmpty ? 0 : (end - start) / text.length;
+
 /// [confirmSpan] wrapped to return a [LineMatch] for a full [SearchEntry].
 LineMatch? confirmMatch(SearchEntry entry, RegExp regex) {
   final span = confirmSpan(entry.original, regex);

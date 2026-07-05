@@ -64,6 +64,8 @@ class _SearchFieldState extends State<SearchField> {
       onSubmitted: (_) => widget.onSubmitted?.call(),
       decoration: InputDecoration(
         hintText: widget.hintText,
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         prefixIcon: const Icon(Icons.search),
         suffixIcon: ValueListenableBuilder<TextEditingValue>(
           valueListenable: _controller,

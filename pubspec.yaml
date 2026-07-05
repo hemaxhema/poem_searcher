@@ -23,6 +23,12 @@ dependencies:
   path_provider: ^2.1.4
   path: ^1.9.0
 
+  # Persist the user's selected/ordered search sources across app restarts.
+  shared_preferences: ^2.3.0
+
+  # Open a poem's source URL in the system browser.
+  url_launcher: ^6.3.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -34,3 +40,4 @@ flutter:
 
   assets:
     - assets/test.db
+    - assets/fonts/

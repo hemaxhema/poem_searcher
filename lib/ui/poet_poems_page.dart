@@ -1,12 +1,14 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../db/poem_repository.dart';
 import '../models/poem.dart';
+import '../models/source.dart';
+import '../services/source_filter_prefs.dart';
 import '../widgets/highlighted_text.dart';
 import '../widgets/search_field.dart';
+import '../widgets/section_header.dart';
+import '../widgets/source_badge.dart';
 import 'poem_detail_page.dart';
 
 /// Shows one poet's poems, with a search field scoped to that poet's verses.
@@ -23,9 +25,19 @@ class PoetPoemsPage extends StatefulWidget {
 class _PoetPoemsPageState extends State<PoetPoemsPage> {
   late Future<List<Poem>> _poemsFuture;
   String _query = '';
+  List<TitleResult> _titleMatches = const [];
   List<LineResult> _matches = const [];
-  Timer? _debounce;
+
+  /// True while a search is in flight, so the results area can show a
+  /// loading spinner instead of stale results during the DB query.
+  bool _isSearching = false;
+
   int _searchToken = 0;
+
+  /// Selected sources, in search priority order. Read from persisted prefs
+  /// (the source of truth, set via the home page's filter dialog).
+  List<Source> _sourceOrder = Source.values;
+
   final FocusNode _searchFocusNode = FocusNode();
   final FocusNode _firstResultFocusNode = FocusNode();
 
@@ -33,41 +45,55 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
   void initState() {
     super.initState();
     _poemsFuture = widget.repo.poemsByPoet(widget.poet);
+    SourceFilterPrefs.load().then((order) {
+      if (mounted) setState(() => _sourceOrder = order);
+    });
   }
 
   @override
   void dispose() {
-    _debounce?.cancel();
     _searchFocusNode.dispose();
     _firstResultFocusNode.dispose();
     super.dispose();
   }
 
   void _focusFirstResult() {
-    if (_matches.isNotEmpty) {
+    if (_titleMatches.isNotEmpty || _matches.isNotEmpty) {
       _firstResultFocusNode.requestFocus();
     }
   }
 
+  // SearchField already debounces keystrokes (see its `debounce` parameter
+  // below), so this only needs to dispatch the (already-settled) query.
   void _onQueryChanged(String query) {
     final trimmed = query.trim();
     _query = trimmed;
-    _debounce?.cancel();
     if (trimmed.isEmpty) {
-      setState(() => _matches = const []);
+      setState(() {
+        _titleMatches = const [];
+        _matches = const [];
+        _isSearching = false;
+      });
       return;
     }
-    _debounce = Timer(
-      const Duration(milliseconds: 250),
-      () => _runSearch(trimmed),
-    );
+    setState(() => _isSearching = true);
+    _runSearch(trimmed);
   }
 
   Future<void> _runSearch(String query) async {
     final token = ++_searchToken;
-    final matches = await widget.repo.searchLines(query, poet: widget.poet);
+    final results = await Future.wait([
+      widget.repo
+          .searchTitles(query, poet: widget.poet, sourceOrder: _sourceOrder),
+      widget.repo
+          .searchLines(query, poet: widget.poet, sourceOrder: _sourceOrder),
+    ]);
     if (!mounted || token != _searchToken || query != _query) return;
-    setState(() => _matches = matches);
+    setState(() {
+      _titleMatches = results[0] as List<TitleResult>;
+      _matches = results[1] as List<LineResult>;
+      _isSearching = false;
+    });
   }
 
   void _openPoem({required int poemId, int? lineId}) {
@@ -105,6 +131,7 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
                     autofocus: false,
                     hintText: 'ابحث في قصائد ${widget.poet}…',
                     focusNode: _searchFocusNode,
+                    debounce: const Duration(seconds: 1),
                     onChanged: _onQueryChanged,
                     onSubmitted: _focusFirstResult,
                   ),
@@ -112,7 +139,9 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
                 Expanded(
                   child: _query.isEmpty
                       ? _buildPoemList(poems)
-                      : _buildMatchList(),
+                      : _isSearching
+                          ? const Center(child: CircularProgressIndicator())
+                          : _buildMatchList(),
                 ),
               ],
             );
@@ -147,17 +176,62 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
   }
 
   Widget _buildMatchList() {
-    if (_matches.isEmpty) {
+    if (_titleMatches.isEmpty && _matches.isEmpty) {
       return const Center(child: Text('لا توجد نتائج.'));
     }
+
+    // Flattened item model so the results list builds lazily:
+    // [titles header, title tiles…], then [lines header, line tiles…].
+    final hasTitles = _titleMatches.isNotEmpty;
+    final titleBlock = hasTitles ? 1 + _titleMatches.length : 0;
+    final lineHeaderIndex = titleBlock;
+    final itemCount = lineHeaderIndex + 1 + _matches.length;
+
     return ListView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      itemCount: _matches.length,
-      itemBuilder: (context, i) {
+      itemCount: itemCount,
+      itemBuilder: (context, index) {
+        if (hasTitles && index < titleBlock) {
+          if (index == 0) {
+            return SectionHeader('عناوين (${_titleMatches.length})');
+          }
+          final i = index - 1;
+          final match = _titleMatches[i];
+          return Card(
+            child: InkWell(
+              focusNode: i == 0 ? _firstResultFocusNode : null,
+              onTap: () => _openPoem(poemId: match.poemId),
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    HighlightedText(
+                      text: match.title,
+                      start: match.start,
+                      end: match.end,
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleMedium
+                          ?.copyWith(height: 1.8),
+                    ),
+                    const SizedBox(height: 8),
+                    SourceBadge(source: match.source),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+        if (index == lineHeaderIndex) {
+          return SectionHeader('أبيات (${_matches.length})');
+        }
+        final i = index - lineHeaderIndex - 1;
         final match = _matches[i];
         return Card(
           child: InkWell(
-            focusNode: i == 0 ? _firstResultFocusNode : null,
+            focusNode: (!hasTitles && i == 0) ? _firstResultFocusNode : null,
             onTap: () => _openPoem(poemId: match.poemId, lineId: match.lineId),
             borderRadius: BorderRadius.circular(12),
             child: Padding(
@@ -174,14 +248,26 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
                         .titleMedium
                         ?.copyWith(height: 1.8),
                   ),
-                  if (match.title.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      match.title,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.outline),
-                    ),
-                  ],
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      SourceBadge(source: match.source),
+                      if (match.title.isNotEmpty) ...[
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            match.title,
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(
+                                    color:
+                                        Theme.of(context).colorScheme.outline),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ],
               ),
             ),

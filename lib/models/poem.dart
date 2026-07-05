@@ -1,3 +1,5 @@
+import 'source.dart';
+
 /// A poem record from the `poem` table.
 class Poem {
   const Poem({
@@ -17,6 +19,10 @@ class Poem {
   final String? page;
   final String? type;
   final String? sourceUrl;
+
+  /// Which of the 3 data sources this poem was drawn from, derived from
+  /// [sourceUrl]; `null` if absent or unrecognized.
+  Source? get source => Source.fromUrl(sourceUrl);
 
   factory Poem.fromRow(Map<String, Object?> row) => Poem(
         id: row['id'] as int,

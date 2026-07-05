@@ -42,10 +42,25 @@ const Set<String> _noLeftJoin = <String>{
 bool _isBaseLetter(String ch) => _baseLetterRe.hasMatch(ch);
 bool _isDiacritic(String ch) => _diacRe.hasMatch(ch);
 
+/// Lam (ل).
+const String _lam = 'ل';
+
+/// Alef and alef-like letters. Immediately after a lam these form a mandatory
+/// ligature (لا، لأ، لإ، لآ), so a tatweel must never be inserted between
+/// them — unlike alef elsewhere, which can still take a preceding tatweel
+/// normally (e.g. كتاب → كتـاب).
+const Set<String> _noRightJoin = <String>{
+  'ا', // ا  alef
+  'أ', // أ  alef with hamza above
+  'إ', // إ  alef with hamza below
+  'آ', // آ  alef with madda
+};
+
 /// Indices in [text] where a tatweel may legally be inserted (i.e. right before
 /// the returned index). A gap qualifies when the previous base letter connects
-/// to its left, the next base letter connects to its right, and only diacritics
-/// sit between them (no space, `=`, or punctuation).
+/// to its left, the next base letter connects to its right, only diacritics
+/// sit between them (no space, `=`, or punctuation), and the pair isn't a
+/// lam-alef ligature (see [_noRightJoin]).
 List<int> kashidaInsertionPoints(String text) {
   final points = <int>[];
   for (var i = 0; i < text.length; i++) {
@@ -58,7 +73,8 @@ List<int> kashidaInsertionPoints(String text) {
     }
     if (j >= text.length) break;
     final next = text[j];
-    if (_isBaseLetter(next) && next != _hamza) {
+    final blockedByLamAlef = ch == _lam && _noRightJoin.contains(next);
+    if (_isBaseLetter(next) && next != _hamza && !blockedByLamAlef) {
       points.add(j); // insert the tatweel just before the next letter
     }
   }

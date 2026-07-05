@@ -2,10 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'db/poem_repository.dart';
+import 'services/app_fonts.dart';
+import 'services/poem_display_prefs.dart';
 import 'ui/home_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await AppFonts.discoverAndLoad();
+  AppFonts.currentFamily.value =
+      (await PoemDisplayPrefs.load()).fontFamily;
   runApp(const PoemSearcherApp());
 }
 

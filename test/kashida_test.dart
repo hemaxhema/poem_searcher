@@ -36,6 +36,21 @@ void main() {
       expect(kashidaInsertionPoints(''), isEmpty);
       expect(kashidaInsertionPoints('   '), isEmpty);
     });
+
+    test('never splits the mandatory lam-alef ligature', () {
+      // "لا": لام + الف form a single ligature glyph, never stretched apart.
+      expect(kashidaInsertionPoints('لا'), isEmpty);
+      // "لأ": same ligature with hamza above.
+      expect(kashidaInsertionPoints('لأ'), isEmpty);
+    });
+
+    test('lam-alef exclusion is local to that pair, not alef in general', () {
+      // "سلام" (س ل ا م): س→ل is joinable, ل→ا is the blocked ligature gap,
+      // and ا is a dead end for its own left join (no gap after it either).
+      expect(kashidaInsertionPoints('سلام'), [1]);
+      // "كتاب" (ك ت ا ب): ت is not lam, so ت→ا is still a legal gap.
+      expect(kashidaInsertionPoints('كتاب'), [1, 2]);
+    });
   });
 
   group('insertKashida', () {

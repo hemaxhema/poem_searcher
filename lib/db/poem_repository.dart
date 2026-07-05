@@ -7,6 +7,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../models/poem.dart';
 import '../models/poem_line.dart';
+import '../models/source.dart';
 import '../search/tashkeel_search.dart';
 
 /// Path of the database bundled as a Flutter asset.
@@ -17,14 +18,22 @@ const String _dbFileName = 'test.db';
 
 /// Bump this whenever a new database asset ships so the previously copied
 /// writable file is refreshed on next launch (see [_ensureWritableDbCopy]).
-const String _dbAssetVersion = '1';
+const String _dbAssetVersion = '3';
 
 /// Upper bound on rows pulled from the coarse SQL filter before the precise
 /// regex confirms them. Keeps a broad query from scanning the whole table.
-const int _candidateLimit = 4000;
+///
+/// Sized to let a single source supply enough confirmed rows to fill
+/// [_maxResults]. Note the trade-off: for very short (1–2 char) probes that
+/// miss the trigram index and fall back to a full `LIKE` scan, a higher cap
+/// means a longer scan. It stays bounded here, and the 1s search debounce plus
+/// the async query keep the UI responsive; tune down if that scan gets costly.
+const int _candidateLimit = 8000;
 
-/// Upper bound on confirmed line results returned to the UI.
-const int _resultLimit = 300;
+/// Upper bound on confirmed results returned to the UI per search. Generous so
+/// broad queries (e.g. a single Arabic letter matching thousands of lines) are
+/// reachable via pagination rather than silently truncated.
+const int _maxResults = 5000;
 
 /// One confirmed line search result, carrying the poem metadata the result
 /// tiles need so they render without any further per-tile database lookup.
@@ -38,6 +47,7 @@ class LineResult {
     required this.title,
     required this.poet,
     required this.lineCount,
+    required this.source,
   });
 
   /// Line text exactly as stored (with tashkeel and punctuation).
@@ -54,6 +64,35 @@ class LineResult {
 
   /// Number of lines in the owning poem (from `poem.line_count`).
   final int lineCount;
+
+  /// Data source this poem was scraped from.
+  final Source source;
+}
+
+/// One confirmed poem-title search result (as opposed to a verse-line match).
+class TitleResult {
+  const TitleResult({
+    required this.poemId,
+    required this.title,
+    required this.start,
+    required this.end,
+    required this.poet,
+    required this.lineCount,
+    required this.source,
+  });
+
+  final int poemId;
+
+  /// Title text exactly as stored.
+  final String title;
+
+  /// Highlight span `[start, end)` into [title].
+  final int start;
+  final int end;
+
+  final String poet;
+  final int lineCount;
+  final Source source;
 }
 
 /// Owns the SQLite connection and the (small) in-memory poet index.
@@ -154,41 +193,133 @@ class PoemRepository {
   /// Tashkeel-aware search over all verses. When [poet] is given, results are
   /// restricted to that poet's poems (used for poet-scoped search).
   ///
+  /// [sourceOrder] selects and orders which of the 3 data sources to search;
+  /// each source is queried in turn so results are grouped by source in that
+  /// priority order, stopping once [_resultLimit] confirmed matches are found
+  /// overall. Defaults to all sources in declared order when omitted.
+  ///
   /// Runs the coarse filter in SQL (trigram FTS `LIKE`, or a bounded fallback
   /// scan for probes shorter than a trigram) and confirms each candidate with
-  /// the precise regex, stopping once [_resultLimit] confirmed matches are
-  /// found. Poem metadata is joined in so results render with no extra lookups.
-  Future<List<LineResult>> searchLines(String query, {String? poet}) async {
+  /// the precise regex. Within each source, confirmed matches are ranked by
+  /// [matchTightness] (tighter/more-exact matches first) before the next
+  /// source is considered. Poem metadata is joined in so results render with
+  /// no extra lookups.
+  Future<List<LineResult>> searchLines(
+    String query, {
+    String? poet,
+    List<Source>? sourceOrder,
+  }) async {
     final regex = buildRegex(query);
     if (regex == null) return const [];
+    final order = sourceOrder ?? Source.values;
+    if (order.isEmpty) return const [];
 
-    final candidates = await _coarseCandidates(coarseProbe(query), poet);
-
+    final probe = coarseProbe(query);
     final results = <LineResult>[];
-    for (final row in candidates) {
-      final original = (row['line'] as String?) ?? '';
-      final span = confirmSpan(original, regex);
-      if (span == null) continue;
-      results.add(LineResult(
-        original: original,
-        start: span.start,
-        end: span.end,
-        poemId: row['poem_id'] as int,
-        lineId: row['id'] as int,
-        title: (row['title'] as String?) ?? '',
-        poet: (row['poet'] as String?) ?? '',
-        lineCount: (row['line_count'] as int?) ?? 0,
-      ));
-      if (results.length >= _resultLimit) break;
+    for (final source in order) {
+      if (results.length >= _maxResults) break;
+      final candidates = await _coarseCandidates(probe, poet, source);
+      final confirmed = <LineResult>[];
+      for (final row in candidates) {
+        final original = (row['line'] as String?) ?? '';
+        final span = confirmSpan(original, regex);
+        if (span == null) continue;
+        confirmed.add(LineResult(
+          original: original,
+          start: span.start,
+          end: span.end,
+          poemId: row['poem_id'] as int,
+          lineId: row['id'] as int,
+          title: (row['title'] as String?) ?? '',
+          poet: (row['poet'] as String?) ?? '',
+          lineCount: (row['line_count'] as int?) ?? 0,
+          source: source,
+        ));
+      }
+      confirmed.sort((a, b) => matchTightness(b.start, b.end, b.original)
+          .compareTo(matchTightness(a.start, a.end, a.original)));
+      results.addAll(confirmed.take(_maxResults - results.length));
     }
     return results;
   }
 
-  /// Runs the coarse SQL pre-filter and returns candidate rows (line + poem
-  /// metadata) for the precise regex to confirm.
+  /// Tashkeel-aware search over poem titles (as opposed to verse lines).
+  /// When [poet] is given, results are restricted to that poet's poems (used
+  /// for poet-scoped search). Same source ordering/priority-grouping and
+  /// within-source relevance ranking as [searchLines].
+  Future<List<TitleResult>> searchTitles(
+    String query, {
+    String? poet,
+    List<Source>? sourceOrder,
+  }) async {
+    final regex = buildRegex(query);
+    if (regex == null) return const [];
+    final order = sourceOrder ?? Source.values;
+    if (order.isEmpty) return const [];
+
+    final probe = coarseProbe(query);
+    final results = <TitleResult>[];
+    for (final source in order) {
+      if (results.length >= _maxResults) break;
+      final candidates = await _coarseTitleCandidates(probe, poet, source);
+      final confirmed = <TitleResult>[];
+      for (final row in candidates) {
+        final title = (row['title'] as String?) ?? '';
+        final span = confirmSpan(title, regex);
+        if (span == null) continue;
+        confirmed.add(TitleResult(
+          poemId: row['id'] as int,
+          title: title,
+          start: span.start,
+          end: span.end,
+          poet: (row['poet'] as String?) ?? '',
+          lineCount: (row['line_count'] as int?) ?? 0,
+          source: source,
+        ));
+      }
+      confirmed.sort((a, b) => matchTightness(b.start, b.end, b.title)
+          .compareTo(matchTightness(a.start, a.end, a.title)));
+      results.addAll(confirmed.take(_maxResults - results.length));
+    }
+    return results;
+  }
+
+  /// Runs the coarse title pre-filter (scoped to a single [source]): a direct
+  /// bounded `LIKE` scan over `poem.title_plain` — no FTS index needed since
+  /// `poem` (hundreds of thousands of rows) is small enough for this to stay
+  /// fast on its own, unlike the multi-million-row `lines` table.
+  Future<List<Map<String, Object?>>> _coarseTitleCandidates(
+    CoarseProbe probe,
+    String? poet,
+    Source source,
+  ) async {
+    final where = <String>[];
+    final args = <Object?>[];
+    if (probe.probe.isNotEmpty) {
+      where.add("title_plain LIKE ? ESCAPE '\\'");
+      args.add('%${_escapeLike(probe.probe)}%');
+    }
+    if (poet != null) {
+      where.add('poet = ?');
+      args.add(poet);
+    }
+    where.add("source_url LIKE ? ESCAPE '\\'");
+    args.add('${_escapeLike(source.urlPrefix)}%');
+
+    final whereSql = 'WHERE ${where.join(' AND ')}';
+    args.add(_candidateLimit);
+    return _db.rawQuery(
+      'SELECT id, title, poet, line_count FROM poem $whereSql LIMIT ?',
+      args,
+    );
+  }
+
+  /// Runs the coarse SQL pre-filter (scoped to a single [source]) and returns
+  /// candidate rows (line + poem metadata) for the precise regex to confirm.
   Future<List<Map<String, Object?>>> _coarseCandidates(
     CoarseProbe probe,
     String? poet,
+    Source source,
   ) async {
     final where = <String>[];
     final args = <Object?>[];
@@ -214,8 +345,10 @@ class PoemRepository {
       where.add('p.poet = ?');
       args.add(poet);
     }
+    where.add("p.source_url LIKE ? ESCAPE '\\'");
+    args.add('${_escapeLike(source.urlPrefix)}%');
 
-    final whereSql = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
+    final whereSql = 'WHERE ${where.join(' AND ')}';
     args.add(_candidateLimit);
     return _db.rawQuery(
       'SELECT l.id, l.poem_id, l.line, l.line_number, '
