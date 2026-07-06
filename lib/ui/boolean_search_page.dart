@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../search/boolean_query.dart';
+import '../widgets/haraka_aware_backspace.dart';
+import '../widgets/help_dialog.dart';
+import '../widgets/visual_caret_arrow_keys.dart';
 
 /// What the boolean search window hands back to the caller when the user
 /// confirms: the raw expression text (so the window can be reopened pre-filled)
@@ -12,7 +16,7 @@ class BooleanSearchResult {
 }
 
 /// The dedicated "boolean search" window. The user composes an expression
-/// combining tashkeel-aware terms with `+` (و), `,` (أو), `-` (بدون) and `( )`
+/// combining tashkeel-aware terms with `+` (و), `|` (أو), `-` (بدون) and `( )`
 /// grouping; a live plain-Arabic preview explains what they wrote before they
 /// run it. Returns a [BooleanSearchResult] via `Navigator.pop`, or nothing if
 /// cancelled.
@@ -28,11 +32,31 @@ class BooleanSearchPage extends StatefulWidget {
 class _BooleanSearchPageState extends State<BooleanSearchPage> {
   late final TextEditingController _controller =
       TextEditingController(text: widget.initialExpression);
+  final FocusNode _focusNode = FocusNode();
+  late final VisualCaretArrowKeys _arrowKeys;
+  late final HarakaAwareBackspace _harakaBackspace;
   late BoolParseResult _parsed = parseBoolean(widget.initialExpression);
 
   @override
+  void initState() {
+    super.initState();
+    _arrowKeys = VisualCaretArrowKeys(
+      controller: _controller,
+      focusNode: _focusNode,
+      styleBuilder: () => Theme.of(context).textTheme.bodyLarge!,
+    )..attach();
+    _harakaBackspace = HarakaAwareBackspace(
+      controller: _controller,
+      focusNode: _focusNode,
+    )..attach();
+  }
+
+  @override
   void dispose() {
+    _arrowKeys.dispose();
+    _harakaBackspace.dispose();
     _controller.dispose();
+    _focusNode.dispose();
     super.dispose();
   }
 
@@ -41,13 +65,15 @@ class _BooleanSearchPageState extends State<BooleanSearchPage> {
   }
 
   /// Inserts [token] at the cursor (replacing any selection) and keeps focus.
-  void _insert(String token) {
+  /// [caretBack] moves the caret left from the end of the inserted text (e.g. 1
+  /// to land between an inserted `[]` pair).
+  void _insert(String token, {int caretBack = 0}) {
     final value = _controller.value;
     final sel = value.selection;
     final start = sel.start < 0 ? value.text.length : sel.start;
     final end = sel.end < 0 ? value.text.length : sel.end;
     final text = value.text.replaceRange(start, end, token);
-    final caret = start + token.length;
+    final caret = start + token.length - caretBack;
     _controller.value = TextEditingValue(
       text: text,
       selection: TextSelection.collapsed(offset: caret),
@@ -68,6 +94,13 @@ class _BooleanSearchPageState extends State<BooleanSearchPage> {
       appBar: AppBar(
         toolbarHeight: 48,
         title: Text('بحث منطقي', style: theme.textTheme.titleMedium),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.help_outline),
+            tooltip: 'مساعدة',
+            onPressed: () => showHelpDialog(context),
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
@@ -81,19 +114,33 @@ class _BooleanSearchPageState extends State<BooleanSearchPage> {
                   ?.copyWith(color: theme.colorScheme.outline),
             ),
             const SizedBox(height: 12),
-            TextField(
-              controller: _controller,
-              autofocus: true,
-              minLines: 1,
-              maxLines: 3,
-              onChanged: _onChanged,
-              onSubmitted: (_) => _submit(),
-              decoration: InputDecoration(
-                hintText: 'مثال: (محمد , أحمد) + رسول - فراق',
-                filled: true,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none,
+            Focus(
+              onKeyEvent: (node, event) {
+                final isEnter = event.logicalKey == LogicalKeyboardKey.enter ||
+                    event.logicalKey == LogicalKeyboardKey.numpadEnter;
+                if (event is KeyDownEvent &&
+                    isEnter &&
+                    !HardwareKeyboard.instance.isShiftPressed) {
+                  _submit();
+                  return KeyEventResult.handled;
+                }
+                return KeyEventResult.ignored;
+              },
+              child: TextField(
+                controller: _controller,
+                focusNode: _focusNode,
+                autofocus: true,
+                minLines: 1,
+                maxLines: 3,
+                onChanged: _onChanged,
+                onSubmitted: (_) => _submit(),
+                decoration: InputDecoration(
+                  hintText: 'مثال: (أرسل | أبلغ) + رسالة - شجون',
+                  filled: true,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
                 ),
               ),
             ),
@@ -103,9 +150,14 @@ class _BooleanSearchPageState extends State<BooleanSearchPage> {
               runSpacing: 8,
               children: [
                 _OpButton(symbol: '+', label: 'و', onTap: () => _insert(' + ')),
-                _OpButton(symbol: '،', label: 'أو', onTap: () => _insert(' , ')),
+                _OpButton(symbol: '|', label: 'أو', onTap: () => _insert(' | ')),
                 _OpButton(symbol: '-', label: 'بدون', onTap: () => _insert(' - ')),
-                _OpButton(symbol: '( )', label: 'تجميع', onTap: () => _insert('()')),
+                _OpButton(symbol: '( )', label: 'تجميع', onTap: () => _insert('()', caretBack: 1)),
+                _OpButton(symbol: '[ ]', label: 'بدائل الحرف', onTap: () => _insert('[]', caretBack: 1)),
+                _OpButton(symbol: ', ،', label: 'فاصلة', onTap: () => _insert('،')),
+                _OpButton(symbol: '*', label: 'أي حروف', onTap: () => _insert('*')),
+                _OpButton(symbol: '؟', label: 'حرف واحد', onTap: () => _insert('؟')),
+                _OpButton(symbol: '_', label: 'أي كلمات', onTap: () => _insert('_')),
               ],
             ),
             const SizedBox(height: 20),

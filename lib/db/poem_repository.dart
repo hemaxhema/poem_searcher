@@ -10,16 +10,17 @@ import '../models/poem_line.dart';
 import '../models/source.dart';
 import '../search/boolean_query.dart';
 import '../search/tashkeel_search.dart';
+import 'search_index.dart';
 
 /// Path of the database bundled as a Flutter asset.
-const String _assetDbPath = 'assets/test.db';
+const String _assetDbPath = 'assets/database/DB_Poems.db';
 
 /// File name of the writable copy in the app-support directory.
-const String _dbFileName = 'test.db';
+const String _dbFileName = 'DB_Poems.db';
 
 /// Bump this whenever a new database asset ships so the previously copied
 /// writable file is refreshed on next launch (see [_ensureWritableDbCopy]).
-const String _dbAssetVersion = '3';
+const String _dbAssetVersion = '5';
 
 /// Upper bound on rows pulled from the coarse SQL filter before the precise
 /// regex confirms them. Keeps a broad query from scanning the whole table.
@@ -114,13 +115,18 @@ class PoemRepository {
   /// Distinct poet names, sorted.
   List<String> get poets => List.unmodifiable(_poets);
 
-  /// Opens the database (copying the asset to a writable location on first run)
-  /// and loads the poet index. Call once at startup.
-  static Future<PoemRepository> open() async {
+  /// Opens the database and loads the poet index. Call once at startup.
+  ///
+  /// The bundled asset is "lean" (verse text + metadata only). The first launch
+  /// — and any launch after a [_dbAssetVersion] bump — copies it to a writable
+  /// location and builds the `plain` / `title_plain` / trigram-FTS search index
+  /// there. That is a one-time, multi-minute step whose progress is reported via
+  /// [onIndexProgress]; later launches reuse the built copy and open instantly.
+  static Future<PoemRepository> open({IndexProgress? onIndexProgress}) async {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
 
-    final dbPath = await _ensureWritableDbCopy();
+    final dbPath = await _prepareDatabase(onIndexProgress);
     final db = await databaseFactory.openDatabase(
       dbPath,
       options: OpenDatabaseOptions(readOnly: true),
@@ -152,24 +158,52 @@ class PoemRepository {
     }
   }
 
-  /// Copies the bundled asset DB into the app-support directory, but only when
-  /// no up-to-date copy already exists — the copy is guarded by a version
-  /// marker file so it is redone only when a new asset ships ([_dbAssetVersion]),
-  /// not on every launch. Returns the writable path.
-  static Future<String> _ensureWritableDbCopy() async {
+  /// Ensures a fully-indexed, writable copy of the database exists and returns
+  /// its path. The version marker is written only *after* a successful index
+  /// build, so an interrupted first run re-copies and rebuilds on the next
+  /// launch instead of leaving a half-built database in use.
+  static Future<String> _prepareDatabase(IndexProgress? onProgress) async {
     final supportDir = await getApplicationSupportDirectory();
     final target = p.join(supportDir.path, _dbFileName);
     final marker = File('$target.version');
 
-    final upToDate = await File(target).exists() &&
+    final ready = await File(target).exists() &&
         await marker.exists() &&
         (await marker.readAsString()).trim() == _dbAssetVersion;
-    if (upToDate) return target;
+    if (ready) return target;
 
-    final bytes = await rootBundle.load(_assetDbPath);
-    await File(target).writeAsBytes(bytes.buffer.asUint8List(), flush: true);
+    await _copyAssetTo(target);
+
+    // Build the search index in the writable copy (opened read-write).
+    final db = await databaseFactory.openDatabase(target);
+    try {
+      await buildSearchIndex(db, onProgress: onProgress);
+    } finally {
+      await db.close();
+    }
     await marker.writeAsString(_dbAssetVersion, flush: true);
     return target;
+  }
+
+  /// Copies the bundled (lean) asset DB to [target]. Prefers a streaming file
+  /// copy of the on-disk asset — Flutter unpacks declared assets to real files
+  /// under the executable's `data/flutter_assets/`, so this never holds the
+  /// whole database in memory. Falls back to loading it through the asset
+  /// bundle only for unusual packaging where that file can't be located.
+  static Future<void> _copyAssetTo(String target) async {
+    await Directory(p.dirname(target)).create(recursive: true);
+    final assetOnDisk = p.join(
+      p.dirname(Platform.resolvedExecutable),
+      'data',
+      'flutter_assets',
+      _assetDbPath,
+    );
+    if (await File(assetOnDisk).exists()) {
+      await File(assetOnDisk).copy(target);
+      return;
+    }
+    final bytes = await rootBundle.load(_assetDbPath);
+    await File(target).writeAsBytes(bytes.buffer.asUint8List(), flush: true);
   }
 
   Future<void> _loadPoets() async {
@@ -216,7 +250,7 @@ class PoemRepository {
   /// Tashkeel-aware search over all verses. When [poet] is given, results are
   /// restricted to that poet's poems (used for poet-scoped search).
   ///
-  /// [sourceOrder] selects and orders which of the 3 data sources to search;
+  /// [sourceOrder] selects and orders which data sources to search;
   /// each source is queried in turn so results are grouped by source in that
   /// priority order, stopping once [_resultLimit] confirmed matches are found
   /// overall. Defaults to all sources in declared order when omitted.
@@ -391,8 +425,8 @@ class PoemRepository {
       where.add('poet = ?');
       args.add(poet);
     }
-    where.add("source_url LIKE ? ESCAPE '\\'");
-    args.add('${_escapeLike(source.urlPrefix)}%');
+    where.add('source_name = ?');
+    args.add(source.displayName);
 
     final whereSql = 'WHERE ${where.join(' AND ')}';
     args.add(_candidateLimit);
@@ -433,8 +467,8 @@ class PoemRepository {
       where.add('p.poet = ?');
       args.add(poet);
     }
-    where.add("p.source_url LIKE ? ESCAPE '\\'");
-    args.add('${_escapeLike(source.urlPrefix)}%');
+    where.add('p.source_name = ?');
+    args.add(source.displayName);
 
     final whereSql = 'WHERE ${where.join(' AND ')}';
     args.add(_candidateLimit);
@@ -475,8 +509,8 @@ class PoemRepository {
       where.add('p.poet = ?');
       args.add(poet);
     }
-    where.add("p.source_url LIKE ? ESCAPE '\\'");
-    args.add('${_escapeLike(source.urlPrefix)}%');
+    where.add('p.source_name = ?');
+    args.add(source.displayName);
 
     final whereSql = 'WHERE ${where.join(' AND ')}';
     args.add(_candidateLimit);
@@ -504,8 +538,8 @@ class PoemRepository {
       where.add('poet = ?');
       args.add(poet);
     }
-    where.add("source_url LIKE ? ESCAPE '\\'");
-    args.add('${_escapeLike(source.urlPrefix)}%');
+    where.add('source_name = ?');
+    args.add(source.displayName);
 
     final whereSql = 'WHERE ${where.join(' AND ')}';
     args.add(_candidateLimit);

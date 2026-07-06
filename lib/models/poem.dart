@@ -10,6 +10,7 @@ class Poem {
     this.page,
     this.type,
     this.sourceUrl,
+    this.sourceName,
   });
 
   final int id;
@@ -20,9 +21,12 @@ class Poem {
   final String? type;
   final String? sourceUrl;
 
-  /// Which of the 3 data sources this poem was drawn from, derived from
-  /// [sourceUrl]; `null` if absent or unrecognized.
-  Source? get source => Source.fromUrl(sourceUrl);
+  /// The stored `poem.source_name` label (see [Source.displayName]).
+  final String? sourceName;
+
+  /// Which data source this poem was drawn from, derived from the stored
+  /// [sourceName]; `null` if absent or unrecognized.
+  Source? get source => Source.fromName(sourceName);
 
   factory Poem.fromRow(Map<String, Object?> row) => Poem(
         id: row['id'] as int,
@@ -32,5 +36,6 @@ class Poem {
         page: row['page'] as String?,
         type: row['type'] as String?,
         sourceUrl: row['source_url'] as String?,
+        sourceName: row['source_name'] as String?,
       );
 }

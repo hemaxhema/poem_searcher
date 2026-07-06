@@ -11,12 +11,15 @@
 /// Operators (all ASCII, chosen so they don't collide with Arabic text or the
 /// existing query syntax):
 ///   `+`            AND
-///   `,` `،` `|`    OR
+///   `|`            OR — the primary/taught symbol; `,` and `،` are accepted
+///                  synonyms (but see [_emitCharClass] in tashkeel_search.dart:
+///                  a `,`/`،` *inside* `[...]` is that group's own option
+///                  separator, unrelated to this OR)
 ///   `-`            NOT ("and not")
 ///   `( )`          grouping — anywhere, including after `-` to negate a group
 ///
 /// Precedence: OR is lowest, AND next, NOT highest; parentheses override. So
-/// `A , B + C` is `A OR (B AND C)` and `A - (B + C)` is `A AND NOT(B AND C)`.
+/// `A | B + C` is `A OR (B AND C)` and `A - (B + C)` is `A AND NOT(B AND C)`.
 library;
 
 import 'tashkeel_search.dart';
@@ -185,7 +188,7 @@ class TermLeaf extends BoolExpr {
   bool get hasPositive => true;
 
   @override
-  String describeArabic() => raw;
+  String describeArabic() => raw.contains('[') ? _glossBrackets(raw) : raw;
 
   @override
   String? toSql(String col, List<Object?> args, String Function(String) esc) {
@@ -201,6 +204,35 @@ class TermLeaf extends BoolExpr {
 String _describeChild(BoolExpr child) {
   final text = child.describeArabic();
   return child._needsGroupingInArabic ? '($text)' : text;
+}
+
+/// Rewrites the `[...]` groups in a term into a readable Arabic gloss for the
+/// preview: positive/empty options joined with «أو» (a blank slot → «لا شيء»),
+/// and any `!`-excluded options appended as «عدا …», wrapped in «(…)». Text
+/// outside the brackets is left as-is. E.g. `مسلم[ين,ون,]` → `مسلم(ين أو ون أو
+/// لا شيء)`; `[ين,ون,!يَن]` → `(ين أو ون عدا يَن)`.
+String _glossBrackets(String raw) {
+  return raw.replaceAllMapped(RegExp(r'\[([^\]]*)\]'), (m) {
+    final choices = <String>[];
+    final excluded = <String>[];
+    for (final rawOpt in m.group(1)!.split(RegExp('[,،]'))) {
+      final opt = rawOpt.trim();
+      if (opt.isEmpty) {
+        choices.add('لا شيء');
+      } else if (opt.startsWith('!')) {
+        excluded.add(opt.substring(1).trim());
+      } else {
+        choices.add(opt);
+      }
+    }
+    final sb = StringBuffer('(')..write(choices.join(' أو '));
+    if (excluded.isNotEmpty) {
+      if (choices.isNotEmpty) sb.write(' ');
+      sb.write('عدا ${excluded.join(' و')}');
+    }
+    sb.write(')');
+    return sb.toString();
+  });
 }
 
 /// Outcome of [parseBoolean]: either a compiled [expr], or an Arabic [errorAr]
@@ -256,8 +288,26 @@ List<_Tok> _tokenize(String query) {
     buffer.clear();
   }
 
+  // Inside a `[...]` character class the operators are ordinary term
+  // characters (its own `,` separates options, not an OR), so bracketed spans
+  // are opaque to the tokenizer.
+  var bracketDepth = 0;
   for (var i = 0; i < query.length; i++) {
     final ch = query[i];
+    if (ch == '[') {
+      bracketDepth++;
+      buffer.write(ch);
+      continue;
+    }
+    if (ch == ']') {
+      if (bracketDepth > 0) bracketDepth--;
+      buffer.write(ch);
+      continue;
+    }
+    if (bracketDepth > 0) {
+      buffer.write(ch);
+      continue;
+    }
     _TokKind? op;
     if (ch == '(') {
       op = _TokKind.lparen;
@@ -361,10 +411,67 @@ class _Parser {
   }
 
   BoolExpr _makeLeaf(String raw) {
-    final regex = buildRegex(raw);
+    _validateBrackets(raw);
+    final regex = buildRegex(raw, charClass: true);
     if (regex == null) {
       throw _ParseError('مصطلح غير صالح: «$raw».');
     }
-    return TermLeaf(raw, regex, coarseProbe(raw));
+    return TermLeaf(raw, regex, coarseProbe(raw, charClass: true));
+  }
+}
+
+/// A single base letter (U+0621..U+063A, U+0641..U+064A) — used to reject
+/// multi-letter negatives in an only-exclusions `[...]` group.
+final RegExp _baseLetterRe = RegExp('[ء-غف-ي]');
+
+/// Validates every `[...]` group in a boolean term, throwing a [_ParseError]
+/// with an Arabic message the live preview can show. Checks: balanced brackets,
+/// non-empty group/options, and — when a group has only `!`-exclusions — that
+/// each exclusion is a single letter (an only-negatives group matches one
+/// letter, so a multi-letter exclusion has no well-defined width).
+void _validateBrackets(String raw) {
+  var depth = 0;
+  for (final ch in raw.split('')) {
+    if (ch == '[') depth++;
+    if (ch == ']') depth--;
+    if (depth < 0) {
+      throw const _ParseError('أقواس مربعة غير متوازنة: «]» زائدة.');
+    }
+  }
+  if (depth != 0) {
+    throw const _ParseError('أقواس مربعة غير متوازنة: ينقص «]».');
+  }
+  for (final m in RegExp(r'\[([^\]]*)\]').allMatches(raw)) {
+    final content = m.group(1)!;
+    final options = content.split(RegExp('[,،]'));
+    var positives = 0;
+    final multiLetterNegatives = <String>[];
+    var anyOption = false;
+    for (final rawOpt in options) {
+      var opt = rawOpt.trim();
+      if (opt.isEmpty) continue;
+      anyOption = true;
+      final neg = opt.startsWith('!');
+      if (neg) opt = opt.substring(1).trim();
+      if (opt.isEmpty) {
+        throw const _ParseError('خيار فارغ داخل الأقواس المربعة [ ].');
+      }
+      if (neg) {
+        if (_baseLetterRe.allMatches(opt).length > 1) {
+          multiLetterNegatives.add(opt);
+        }
+      } else {
+        positives++;
+      }
+    }
+    if (!anyOption) {
+      throw const _ParseError('أقواس مربعة فارغة [].');
+    }
+    if (positives == 0 && multiLetterNegatives.isNotEmpty) {
+      throw _ParseError(
+        'مع النفي فقط داخل [ ] استخدم حرفًا واحدًا (مثل [!و])، '
+        'أو أضف خيارًا موجبًا: «${multiLetterNegatives.first}».',
+      );
+    }
   }
 }

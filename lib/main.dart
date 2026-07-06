@@ -54,7 +54,23 @@ class _Bootstrap extends StatefulWidget {
 }
 
 class _BootstrapState extends State<_Bootstrap> {
-  late final Future<PoemRepository> _repoFuture = PoemRepository.open();
+  /// First-run index-build progress text, or `null` when there is no build in
+  /// progress (already indexed, so startup is near-instant).
+  final ValueNotifier<String?> _status = ValueNotifier<String?>(null);
+  late final Future<PoemRepository> _repoFuture =
+      PoemRepository.open(onIndexProgress: _onIndexProgress);
+
+  void _onIndexProgress(String label, int done, int total) {
+    _status.value = total > 0
+        ? '$label… ${(100 * done / total).floor()}٪'
+        : '$label…';
+  }
+
+  @override
+  void dispose() {
+    _status.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -74,13 +90,35 @@ class _BootstrapState extends State<_Bootstrap> {
             );
           }
           if (!snapshot.hasData) {
-            return const Scaffold(
-              body: Center(child: CircularProgressIndicator()),
-            );
+            return Scaffold(body: Center(child: _buildLoading()));
           }
           return HomePage(repo: snapshot.data!);
         },
       ),
+    );
+  }
+
+  Widget _buildLoading() {
+    return ValueListenableBuilder<String?>(
+      valueListenable: _status,
+      builder: (context, status, _) {
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            if (status != null) ...[
+              const SizedBox(height: 20),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Text(
+                  'جارٍ تجهيز فهرس البحث لأول مرة، قد يستغرق بضع دقائق.\n$status',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ],
+          ],
+        );
+      },
     );
   }
 }

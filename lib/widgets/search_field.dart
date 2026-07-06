@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'haraka_aware_backspace.dart';
+import 'visual_caret_arrow_keys.dart';
+
 /// A search text field that debounces changes and reports the query via
 /// [onChanged]. RTL-friendly; suitable for Arabic input.
 class SearchField extends StatefulWidget {
@@ -30,13 +33,31 @@ class _SearchFieldState extends State<SearchField> {
   final TextEditingController _controller = TextEditingController();
   FocusNode? _internalFocusNode;
   Timer? _timer;
+  late final VisualCaretArrowKeys _arrowKeys;
+  late final HarakaAwareBackspace _harakaBackspace;
 
   FocusNode get _effectiveFocusNode =>
       widget.focusNode ?? (_internalFocusNode ??= FocusNode());
 
   @override
+  void initState() {
+    super.initState();
+    _arrowKeys = VisualCaretArrowKeys(
+      controller: _controller,
+      focusNode: _effectiveFocusNode,
+      styleBuilder: () => Theme.of(context).textTheme.bodyLarge!,
+    )..attach();
+    _harakaBackspace = HarakaAwareBackspace(
+      controller: _controller,
+      focusNode: _effectiveFocusNode,
+    )..attach();
+  }
+
+  @override
   void dispose() {
     _timer?.cancel();
+    _arrowKeys.dispose();
+    _harakaBackspace.dispose();
     _controller.dispose();
     _internalFocusNode?.dispose();
     super.dispose();

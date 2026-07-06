@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/source.dart';
 
-/// Small pill naming which of the 3 data sources a result came from.
+/// Small pill naming which data source a result came from.
 class SourceBadge extends StatelessWidget {
   const SourceBadge({super.key, required this.source});
 

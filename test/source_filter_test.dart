@@ -4,13 +4,37 @@ import 'package:poem_searcher/services/source_filter_prefs.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  test('every source has a non-empty prefix and Arabic display name', () {
+  test('every source has an Arabic display name, unique across sources', () {
     for (final source in Source.values) {
-      expect(source.urlPrefix, isNotEmpty);
       expect(source.displayName, isNotEmpty);
     }
-    // Prefixes must be distinct or the per-source SQL filter would overlap.
-    expect(Source.values.map((s) => s.urlPrefix).toSet(), hasLength(3));
+    // Display names are the stored `poem.source_name` filter key, so they must
+    // be distinct across all sources.
+    expect(
+      Source.values.map((s) => s.displayName).toSet(),
+      hasLength(Source.values.length),
+    );
+  });
+
+  test('the three web sources have distinct non-empty URL prefixes', () {
+    final prefixed =
+        Source.values.where((s) => s.urlPrefix != null).map((s) => s.urlPrefix!);
+    for (final prefix in prefixed) {
+      expect(prefix, isNotEmpty);
+    }
+    // Prefixes must be distinct or fromUrl would be ambiguous.
+    expect(prefixed.toSet(), hasLength(3));
+  });
+
+  test('moktoum has no URL prefix (its poems carry no source_url)', () {
+    expect(Source.moktoum.urlPrefix, isNull);
+  });
+
+  test('fromName maps a stored display name back to its Source', () {
+    expect(Source.fromName('موسوعة آل مكتوم'), Source.moktoum);
+    expect(Source.fromName('الديوان'), Source.aldiwan);
+    expect(Source.fromName(null), isNull);
+    expect(Source.fromName('unknown'), isNull);
   });
 
   group('SourceFilterPrefs', () {

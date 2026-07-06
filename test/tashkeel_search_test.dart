@@ -188,6 +188,93 @@ void main() {
     });
   });
 
+  group('Hard combined-feature edge cases', () {
+    test('؟ then * — one required unknown letter plus an open suffix', () {
+      expect(matches('ح؟مد*', 'حامدون'), isTrue);
+      expect(matches('ح؟مد*', 'حمدون'), isFalse); // missing the required ؟ letter
+    });
+    test('* then ؟ — open prefix plus one required trailing letter', () {
+      // Exactly one letter after "مد", then the word must end there.
+      expect(matches('*مد؟', 'أحمدي'), isTrue);
+      expect(matches('*مد؟', 'محمد'), isFalse); // no letter after د
+      expect(matches('*مد؟', 'محمدين'), isFalse); // two letters follow, not one
+    });
+    test('consecutive ** behaves like a single *', () {
+      expect(matches('زيد**', 'زيدلون'), isTrue);
+      expect(matches('زيد**', 'زيد'), isTrue);
+    });
+    test('three consecutive ؟؟؟ requires exactly three letters', () {
+      expect(matches('؟؟؟', 'حمد'), isTrue);
+      expect(matches('؟؟؟', 'حم'), isFalse);
+      expect(matches('؟؟؟', 'حمدل'), isFalse);
+    });
+    test('a diacritic with no preceding base letter anywhere is ignored', () {
+      // A stray fatha before any letter contributes nothing to the pattern.
+      expect(matches('َحمد', 'حمد'), isTrue);
+    });
+    test('a query of only diacritics/tatweel matches nothing', () {
+      expect(matches('َ', 'حمد'), isFalse);
+      expect(matches('ـــ', 'حمد'), isFalse);
+    });
+    test('unterminated quote: the rest of the query is treated as exact', () {
+      // Only one '"' — dequote toggles "exact" on and never back off.
+      expect(matches('"ي', 'ي'), isTrue);
+      expect(matches('"ي', 'ى'), isFalse);
+    });
+    test('two independent quoted spans in one query', () {
+      // First "ا" is exact; the middle ي (in زيد) still folds; the final "ي"
+      // is exact again.
+      const q = '"ا"زيد"ي"';
+      expect(matches(q, 'ازيدي'), isTrue);
+      expect(matches(q, 'أزيدي'), isFalse); // leading exact ا rejects أ
+      expect(matches(q, 'ازىدي'), isTrue); // middle letter still folds ي/ى
+      expect(matches(q, 'ازيدى'), isFalse); // trailing exact ي rejects ى
+    });
+    test('lazy * still reaches the full word under the boundary anchor', () {
+      final index = [
+        SearchEntry(original: 'رأيت زيدلة قادمة', lineId: 1, poemId: 1, lineNumber: 1),
+      ];
+      final res = searchEntries(index, 'زيد*');
+      expect(res, hasLength(1));
+      final m = res.first;
+      // Despite * being lazy, the trailing word-boundary requirement forces
+      // the match to extend across the whole word "زيدلة", not stop early.
+      expect(m.entry.original.substring(m.start, m.end), 'زيدلة');
+    });
+    test('* and _ combine: open prefix then a bridge of whole words', () {
+      expect(matches('*مد _ الشعر', 'محمد في وصف الشعر'), isTrue);
+      expect(matches('*مد _ الشعر', 'محمد الشعر'), isTrue); // zero bridged words
+    });
+    test('quoting disables folding but not the diacritic-optionality rule', () {
+      // Quoting only touches ي/ى and alif-hamza folding (rule 8); a bare
+      // quoted letter still matches with or without a diacritic (rule 1).
+      expect(matches('"علي"', 'عليّ'), isTrue);
+      expect(matches('"علي"', 'علي'), isTrue);
+    });
+  });
+
+  group('CoarseProbe — hard edge cases', () {
+    test('a wildcard-free query probes the whole normalized text', () {
+      expect(coarseProbe('حمد').probe, 'حمد');
+    });
+    test('an all-wildcard query yields an empty, unusable probe', () {
+      final p = coarseProbe('؟؟');
+      expect(p.probe, isEmpty);
+      expect(p.canUseIndex, isFalse);
+    });
+    test('the longest literal segment between wildcards is chosen', () {
+      // "زيد" (3 letters) is longer than "ب" (1 letter).
+      expect(coarseProbe('زيد*ب').probe, 'زيد');
+    });
+    test('canUseIndex boundary: 3 chars qualifies, 2 does not', () {
+      expect(const CoarseProbe('اقل').canUseIndex, isTrue); // 3 chars
+      expect(const CoarseProbe('اق').canUseIndex, isFalse); // 2 chars
+    });
+    test('quotes are stripped from the probe key (dequoted first)', () {
+      expect(coarseProbe('"آ"من').probe, 'امن'); // folded + dequoted
+    });
+  });
+
   group('matchTightness — relevance score used to rank search results', () {
     test('a full-text match scores 1.0', () {
       expect(matchTightness(0, 5, 'ابجدة'), 1.0);

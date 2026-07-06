@@ -121,7 +121,12 @@ String? _equivalenceClass(String ch) {
 
 /// Builds the regex source string for [query], or `null` if the query contains
 /// no base letters (only punctuation/diacritics/whitespace).
-String? buildRegexSource(String query) {
+///
+/// When [charClass] is true, a `[...]` group is compiled as an in-word
+/// character class / alternation (see [_emitCharClass]); otherwise `[` is a
+/// plain literal (the default, so the main search box is unaffected). Only the
+/// boolean-window term compiler passes `charClass: true`.
+String? buildRegexSource(String query, {bool charClass = false}) {
   final dequoted = _dequote(query);
   final text = dequoted.text;
   final exactAt = dequoted.exact;
@@ -181,6 +186,16 @@ String? buildRegexSource(String query) {
       suppressNextSpace = false;
       continue;
     }
+    if (charClass && ch == '[') {
+      final close = text.indexOf(']', i + 1);
+      if (close > i) {
+        if (_emitCharClass(sb, text.substring(i + 1, close))) hasLetter = true;
+        i = close + 1;
+        suppressNextSpace = false;
+        continue;
+      }
+      // Unbalanced '[': fall through and treat it as a literal base letter.
+    }
     // Base letter: gather the diacritics bound to it (skipping tatweel).
     final dia = StringBuffer();
     var j = i + 1;
@@ -191,21 +206,7 @@ String? buildRegexSource(String query) {
       j++;
     }
     // Rule 8: fold to the letter's equivalence class unless quoted-exact.
-    final cls = exactAt[i] ? null : _equivalenceClass(ch);
-    sb.write(cls ?? _escape(ch));
-    if (dia.isEmpty) {
-      sb.write('$diacClass*'); // rule 1: any/no diacritic
-    } else {
-      // Rule 2: every typed diacritic must be present on the letter (in any
-      // order); additional diacritics on the same letter are still allowed —
-      // e.g. a shadda typed alone still matches shadda+fatha, since a vowel
-      // commonly accompanies a shadda in fully-vocalized text.
-      final diaText = dia.toString();
-      for (var k = 0; k < diaText.length; k++) {
-        sb.write('(?=$diacClass*${_escape(diaText[k])})');
-      }
-      sb.write('$diacClass*');
-    }
+    _emitLetter(sb, ch, dia.toString(), exact: exactAt[i]);
     hasLetter = true;
     i = j;
     suppressNextSpace = false;
@@ -219,6 +220,95 @@ String? buildRegexSource(String query) {
   return '(?<![$_wordCharInner])${sb.toString()}(?![$_wordCharInner])';
 }
 
+/// Emits the regex for one base [letter] carrying [diacritics] (the typed
+/// diacritics bound to it, with tatweel already removed). When [exact] is true
+/// the ي/ى and alif-hamza folds are disabled (rule 8). Shared by the main query
+/// walk and the `[...]` character-class options.
+void _emitLetter(
+  StringBuffer sb,
+  String letter,
+  String diacritics, {
+  required bool exact,
+}) {
+  final cls = exact ? null : _equivalenceClass(letter);
+  sb.write(cls ?? _escape(letter));
+  if (diacritics.isEmpty) {
+    sb.write('$diacClass*'); // rule 1: any/no diacritic
+  } else {
+    // Rule 2: every typed diacritic must be present (in any order); extra
+    // diacritics on the same letter are still allowed.
+    for (var k = 0; k < diacritics.length; k++) {
+      sb.write('(?=$diacClass*${_escape(diacritics[k])})');
+    }
+    sb.write('$diacClass*');
+  }
+}
+
+/// Compiles a plain run of letters + optional diacritics (one `[...]` option)
+/// into a regex fragment, or `null` if it has no base letter. Folding always
+/// applies (no exact-quoting inside brackets); tatweel/whitespace are ignored.
+String? _compileLetterRun(String seq) {
+  final sb = StringBuffer();
+  var has = false;
+  var i = 0;
+  while (i < seq.length) {
+    final ch = seq[i];
+    if (_isWhitespace(ch) || isDiacriticOrTatweel(ch)) {
+      i++; // leading/stray diacritic, tatweel, or whitespace: ignore.
+      continue;
+    }
+    final dia = StringBuffer();
+    var j = i + 1;
+    while (j < seq.length && isDiacriticOrTatweel(seq[j])) {
+      if (seq[j] != tatweel) dia.write(seq[j]);
+      j++;
+    }
+    _emitLetter(sb, ch, dia.toString(), exact: false);
+    has = true;
+    i = j;
+  }
+  return has ? sb.toString() : null;
+}
+
+/// Compiles the inside of a `[...]` group (its comma-separated options) into the
+/// buffer as `(?!neg)…(?:pos|…)` — matches at this spot when any positive option
+/// matches and no `!`-negated option matches. With only negatives, the positive
+/// group becomes a single base letter, so `[!و]` means "one letter that isn't و".
+/// An **empty option** (a blank comma slot, e.g. `[ين,ون,]`) makes the group
+/// optional — it may also match nothing — so the whole word ending becomes
+/// optional. Returns true if anything was emitted (so the caller can mark a
+/// letter seen).
+bool _emitCharClass(StringBuffer sb, String content) {
+  final positives = <String>[];
+  final negatives = <String>[];
+  var allowEmpty = false;
+  for (final rawOpt in content.split(RegExp('[,،]'))) {
+    var opt = rawOpt.trim();
+    if (opt.isEmpty) {
+      allowEmpty = true; // blank slot: the group may match nothing.
+      continue;
+    }
+    final neg = opt.startsWith('!');
+    if (neg) opt = opt.substring(1).trim();
+    final frag = _compileLetterRun(opt);
+    if (frag == null) continue;
+    (neg ? negatives : positives).add(frag);
+  }
+  if (positives.isEmpty && negatives.isEmpty) return false;
+  for (final n in negatives) {
+    sb.write('(?!$n)');
+  }
+  if (positives.isNotEmpty) {
+    // Trailing `|` adds a zero-width alternative when the group is optional.
+    sb.write('(?:${positives.join('|')}${allowEmpty ? '|' : ''})');
+  } else {
+    // Only negatives: one base letter that isn't excluded, optional if empty.
+    final base = '$arabicLetterClass$diacClass*';
+    sb.write(allowEmpty ? '(?:$base)?' : base);
+  }
+  return true;
+}
+
 const String _wordCharInner = '$arabicLetterInner$diacInner';
 
 /// One whole word's worth of letters (a maximal run of letter+diacritic
@@ -227,8 +317,9 @@ const String _wordCharInner = '$arabicLetterInner$diacInner';
 const String _wordUnit = '(?:$arabicLetterClass$diacClass*)+';
 
 /// Compiles [query] into a [RegExp], or `null` if the query has no base letters.
-RegExp? buildRegex(String query) {
-  final source = buildRegexSource(query);
+/// See [buildRegexSource] for [charClass].
+RegExp? buildRegex(String query, {bool charClass = false}) {
+  final source = buildRegexSource(query, charClass: charClass);
   return source == null ? null : RegExp(source);
 }
 
@@ -268,9 +359,16 @@ class CoarseProbe {
 /// For a wildcard query no single contiguous key spans the whole match, so the
 /// query is split on the wildcard markers (`*`, `?`, `؟`, `_`) and the longest
 /// normalized literal segment becomes the probe (the regex confirms the rest).
-CoarseProbe coarseProbe(String query) {
-  final text = _dequote(query).text;
-  if (!_queryHasWildcard(query)) {
+///
+/// When [charClass] is true, each `[...]` group is likewise a boundary the probe
+/// cannot span, so its span is neutralized to a wildcard before splitting — a
+/// stem like `مسلم` in `مسلم[ين,ون]` still yields an index-usable probe.
+CoarseProbe coarseProbe(String query, {bool charClass = false}) {
+  var text = _dequote(query).text;
+  if (charClass) {
+    text = text.replaceAll(RegExp(r'\[[^\]]*\]'), '*');
+  }
+  if (!_queryHasWildcard(text)) {
     return CoarseProbe(stripAll(text));
   }
   var best = '';

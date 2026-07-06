@@ -1,1 +1,0 @@
-- [Arabic conclusion](feedback_arabic_conclusion.md) — global rule: end every answer with a short focused conclusion in Arabic.

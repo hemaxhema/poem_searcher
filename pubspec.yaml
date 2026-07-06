@@ -39,5 +39,5 @@ flutter:
   uses-material-design: true
 
   assets:
-    - assets/test.db
+    - assets/database/DB_Poems.db
     - assets/fonts/
