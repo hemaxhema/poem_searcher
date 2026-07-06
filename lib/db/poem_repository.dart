@@ -8,6 +8,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import '../models/poem.dart';
 import '../models/poem_line.dart';
 import '../models/source.dart';
+import '../search/boolean_query.dart';
 import '../search/tashkeel_search.dart';
 
 /// Path of the database bundled as a Flutter asset.
@@ -124,9 +125,31 @@ class PoemRepository {
       dbPath,
       options: OpenDatabaseOptions(readOnly: true),
     );
+    await _tuneForReads(db);
     final repo = PoemRepository._(db);
     await repo._loadPoets();
     return repo;
+  }
+
+  /// Applies read-tuning PRAGMAs to a freshly opened connection. These are
+  /// per-connection (not persisted in the file) so they run on every [open].
+  ///
+  /// The database is a large (~1.9 GB) read-only asset, and search is dominated
+  /// by I/O over the trigram `LIKE` scans (and the short-probe fallback full
+  /// scan). A big memory-mapped window avoids per-page syscalls/copies, a larger
+  /// page cache keeps hot pages resident across the per-source queries, and
+  /// in-memory temp storage speeds any transient sort. No schema change, so no
+  /// [_dbAssetVersion] bump is needed. Best-effort: a rejected PRAGMA must not
+  /// stop the app from opening.
+  static Future<void> _tuneForReads(Database db) async {
+    try {
+      await db.execute('PRAGMA mmap_size=268435456;'); // 256 MB mmap I/O
+      await db.execute('PRAGMA cache_size=-65536;'); // 64 MB page cache (KB)
+      await db.execute('PRAGMA temp_store=MEMORY;');
+      await db.execute('PRAGMA query_only=ON;');
+    } catch (_) {
+      // Tuning is an optimization only; ignore if the platform rejects a PRAGMA.
+    }
   }
 
   /// Copies the bundled asset DB into the app-support directory, but only when
@@ -211,18 +234,53 @@ class PoemRepository {
   }) async {
     final regex = buildRegex(query);
     if (regex == null) return const [];
-    final order = sourceOrder ?? Source.values;
-    if (order.isEmpty) return const [];
-
     final probe = coarseProbe(query);
+    return _searchLinesCore(
+      sourceOrder ?? Source.values,
+      (source) => _coarseCandidates(probe, poet, source),
+      (original) => confirmSpan(original, regex),
+    );
+  }
+
+  /// Boolean line search: same coarse-filter + Dart-confirm pipeline as
+  /// [searchLines], but the candidate filter and per-row confirmation come from
+  /// a parsed [BoolExpr] (AND / OR / NOT with grouping). Returns nothing when
+  /// the expression has no positive term to anchor the results.
+  Future<List<LineResult>> searchLinesBoolean(
+    BoolExpr expr, {
+    String? poet,
+    List<Source>? sourceOrder,
+  }) async {
+    if (!expr.hasPositive) return const [];
+    return _searchLinesCore(
+      sourceOrder ?? Source.values,
+      (source) => _coarseCandidatesBoolean(expr, poet, source),
+      expr.match,
+    );
+  }
+
+  /// Shared driver for the line search: iterates [order] source-by-source,
+  /// pulls candidate rows from [coarse], confirms each with [confirm] (a span or
+  /// `null`), ranks confirmed rows within the source by [matchTightness], and
+  /// stops at [_maxResults]. Used by both the plain and boolean line searches.
+  Future<List<LineResult>> _searchLinesCore(
+    List<Source> order,
+    Future<List<Map<String, Object?>>> Function(Source) coarse,
+    ({int start, int end})? Function(String) confirm,
+  ) async {
+    if (order.isEmpty) return const [];
     final results = <LineResult>[];
     for (final source in order) {
       if (results.length >= _maxResults) break;
-      final candidates = await _coarseCandidates(probe, poet, source);
+      final candidates = await coarse(source);
       final confirmed = <LineResult>[];
+      var scanned = 0;
       for (final row in candidates) {
+        // Yield periodically so the CPU-bound regex confirm doesn't block a
+        // frame for too long, keeping the UI responsive during a broad search.
+        if (++scanned % 512 == 0) await Future<void>.delayed(Duration.zero);
         final original = (row['line'] as String?) ?? '';
-        final span = confirmSpan(original, regex);
+        final span = confirm(original);
         if (span == null) continue;
         confirmed.add(LineResult(
           original: original,
@@ -254,18 +312,48 @@ class PoemRepository {
   }) async {
     final regex = buildRegex(query);
     if (regex == null) return const [];
-    final order = sourceOrder ?? Source.values;
-    if (order.isEmpty) return const [];
-
     final probe = coarseProbe(query);
+    return _searchTitlesCore(
+      sourceOrder ?? Source.values,
+      (source) => _coarseTitleCandidates(probe, poet, source),
+      (title) => confirmSpan(title, regex),
+    );
+  }
+
+  /// Boolean title search — the [searchTitles] counterpart of
+  /// [searchLinesBoolean].
+  Future<List<TitleResult>> searchTitlesBoolean(
+    BoolExpr expr, {
+    String? poet,
+    List<Source>? sourceOrder,
+  }) async {
+    if (!expr.hasPositive) return const [];
+    return _searchTitlesCore(
+      sourceOrder ?? Source.values,
+      (source) => _coarseTitleCandidatesBoolean(expr, poet, source),
+      expr.match,
+    );
+  }
+
+  /// Shared driver for the title search (see [_searchLinesCore]).
+  Future<List<TitleResult>> _searchTitlesCore(
+    List<Source> order,
+    Future<List<Map<String, Object?>>> Function(Source) coarse,
+    ({int start, int end})? Function(String) confirm,
+  ) async {
+    if (order.isEmpty) return const [];
     final results = <TitleResult>[];
     for (final source in order) {
       if (results.length >= _maxResults) break;
-      final candidates = await _coarseTitleCandidates(probe, poet, source);
+      final candidates = await coarse(source);
       final confirmed = <TitleResult>[];
+      var scanned = 0;
       for (final row in candidates) {
+        // Yield periodically so the CPU-bound regex confirm doesn't block a
+        // frame for too long, keeping the UI responsive during a broad search.
+        if (++scanned % 512 == 0) await Future<void>.delayed(Duration.zero);
         final title = (row['title'] as String?) ?? '';
-        final span = confirmSpan(title, regex);
+        final span = confirm(title);
         if (span == null) continue;
         confirmed.add(TitleResult(
           poemId: row['id'] as int,
@@ -354,6 +442,75 @@ class PoemRepository {
       'SELECT l.id, l.poem_id, l.line, l.line_number, '
       'p.title, p.poet, p.line_count '
       'FROM $from $whereSql LIMIT ?',
+      args,
+    );
+  }
+
+  /// Boolean counterpart of [_coarseCandidates]: drives the FTS trigram index
+  /// off the expression's [BoolExpr.mandatoryDriver] (a probe present in every
+  /// match) when one exists, else a bounded fallback scan, and adds the
+  /// expression's superset predicate ([BoolExpr.toSql]) as the extra filter.
+  Future<List<Map<String, Object?>>> _coarseCandidatesBoolean(
+    BoolExpr expr,
+    String? poet,
+    Source source,
+  ) async {
+    final where = <String>[];
+    final args = <Object?>[];
+    final String from;
+
+    final driver = expr.mandatoryDriver();
+    if (driver != null) {
+      from = 'lines_fts f '
+          'JOIN lines l ON l.id = f.rowid '
+          'JOIN poem p ON p.id = l.poem_id';
+      where.add("f.plain LIKE ? ESCAPE '\\'");
+      args.add('%${_escapeLike(driver)}%');
+    } else {
+      from = 'lines l JOIN poem p ON p.id = l.poem_id';
+    }
+    final predicate = expr.toSql('l.plain', args, _escapeLike);
+    if (predicate != null) where.add(predicate);
+    if (poet != null) {
+      where.add('p.poet = ?');
+      args.add(poet);
+    }
+    where.add("p.source_url LIKE ? ESCAPE '\\'");
+    args.add('${_escapeLike(source.urlPrefix)}%');
+
+    final whereSql = 'WHERE ${where.join(' AND ')}';
+    args.add(_candidateLimit);
+    return _db.rawQuery(
+      'SELECT l.id, l.poem_id, l.line, l.line_number, '
+      'p.title, p.poet, p.line_count '
+      'FROM $from $whereSql LIMIT ?',
+      args,
+    );
+  }
+
+  /// Boolean counterpart of [_coarseTitleCandidates]: a bounded `LIKE` scan over
+  /// `poem.title_plain` filtered by the expression's superset predicate.
+  Future<List<Map<String, Object?>>> _coarseTitleCandidatesBoolean(
+    BoolExpr expr,
+    String? poet,
+    Source source,
+  ) async {
+    final where = <String>[];
+    final args = <Object?>[];
+
+    final predicate = expr.toSql('title_plain', args, _escapeLike);
+    if (predicate != null) where.add(predicate);
+    if (poet != null) {
+      where.add('poet = ?');
+      args.add(poet);
+    }
+    where.add("source_url LIKE ? ESCAPE '\\'");
+    args.add('${_escapeLike(source.urlPrefix)}%');
+
+    final whereSql = 'WHERE ${where.join(' AND ')}';
+    args.add(_candidateLimit);
+    return _db.rawQuery(
+      'SELECT id, title, poet, line_count FROM poem $whereSql LIMIT ?',
       args,
     );
   }

@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import '../db/poem_repository.dart';
 import '../models/poem.dart';
 import '../models/source.dart';
+import '../search/search_sort.dart';
+import '../services/search_sort_prefs.dart';
 import '../services/source_filter_prefs.dart';
 import '../widgets/highlighted_text.dart';
 import '../widgets/search_field.dart';
@@ -25,8 +27,18 @@ class PoetPoemsPage extends StatefulWidget {
 class _PoetPoemsPageState extends State<PoetPoemsPage> {
   late Future<List<Poem>> _poemsFuture;
   String _query = '';
+
+  /// Repository output, in relevance order. Display lists are derived from these
+  /// by [_applySort].
+  List<TitleResult> _rawTitleMatches = const [];
+  List<LineResult> _rawMatches = const [];
+
+  /// Display lists (sorted per [_sortMode]) that the result views read.
   List<TitleResult> _titleMatches = const [];
   List<LineResult> _matches = const [];
+
+  /// How results are ordered. Loaded from persisted prefs (shared with home).
+  SearchSort _sortMode = SearchSort.relevance;
 
   /// True while a search is in flight, so the results area can show a
   /// loading spinner instead of stale results during the DB query.
@@ -48,6 +60,32 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
     SourceFilterPrefs.load().then((order) {
       if (mounted) setState(() => _sourceOrder = order);
     });
+    SearchSortPrefs.load().then((sort) {
+      if (mounted) {
+        setState(() {
+          _sortMode = sort;
+          _applySort();
+        });
+      }
+    });
+  }
+
+  /// Derives the display lists from the raw (relevance-ordered) results per the
+  /// current [_sortMode] and source order. Cheap in-memory reorder — no DB hit.
+  void _applySort() {
+    _titleMatches = sortTitleResults(_rawTitleMatches, _sortMode, _sourceOrder);
+    _matches = sortLineResults(_rawMatches, _sortMode, _sourceOrder);
+  }
+
+  /// Switches the result sort mode, reordering already-fetched results in memory
+  /// (no query, no [_searchToken] change) and persisting the choice.
+  Future<void> _setSortMode(SearchSort mode) async {
+    if (mode == _sortMode) return;
+    setState(() {
+      _sortMode = mode;
+      _applySort();
+    });
+    await SearchSortPrefs.save(mode);
   }
 
   @override
@@ -90,8 +128,9 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
     ]);
     if (!mounted || token != _searchToken || query != _query) return;
     setState(() {
-      _titleMatches = results[0] as List<TitleResult>;
-      _matches = results[1] as List<LineResult>;
+      _rawTitleMatches = results[0] as List<TitleResult>;
+      _rawMatches = results[1] as List<LineResult>;
+      _applySort();
       _isSearching = false;
     });
   }
@@ -109,7 +148,25 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.poet)),
+      appBar: AppBar(
+        title: Text(widget.poet),
+        actions: [
+          PopupMenuButton<SearchSort>(
+            icon: const Icon(Icons.sort),
+            tooltip: 'ترتيب النتائج',
+            initialValue: _sortMode,
+            onSelected: _setSortMode,
+            itemBuilder: (_) => [
+              for (final sort in SearchSort.values)
+                CheckedPopupMenuItem(
+                  value: sort,
+                  checked: sort == _sortMode,
+                  child: Text(sort.label),
+                ),
+            ],
+          ),
+        ],
+      ),
       body: CallbackShortcuts(
         bindings: {
           const SingleActivator(LogicalKeyboardKey.keyF, control: true): () {

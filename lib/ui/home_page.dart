@@ -3,7 +3,10 @@ import 'package:flutter/services.dart';
 
 import '../db/poem_repository.dart';
 import '../models/source.dart';
+import '../search/boolean_query.dart';
+import '../search/search_sort.dart';
 import '../services/app_fonts.dart';
+import '../services/search_sort_prefs.dart';
 import '../services/source_filter_prefs.dart';
 import '../widgets/help_dialog.dart';
 import '../widgets/highlighted_text.dart';
@@ -11,6 +14,7 @@ import '../widgets/search_field.dart';
 import '../widgets/section_header.dart';
 import '../widgets/source_badge.dart';
 import '../widgets/source_filter_dialog.dart';
+import 'boolean_search_page.dart';
 import 'poem_detail_page.dart';
 import 'poets_page.dart';
 import 'results_pagination.dart';
@@ -30,8 +34,31 @@ class _HomePageState extends State<HomePage> {
   static const int _pageSize = 100;
 
   String _query = '';
+
+  /// The active boolean-search expression, or `null` when searching via the
+  /// plain box. When set, [_runSearch] uses the boolean repository methods and a
+  /// banner explaining it (in Arabic) is shown above the results.
+  BoolExpr? _boolExpr;
+  String? _boolDescription;
+
+  /// The raw boolean expression text, kept so the window reopens pre-filled.
+  String _boolRaw = '';
+
+  /// Bumped to force the plain [SearchField] to reset its text (e.g. when a
+  /// boolean search takes over) via a changing [ValueKey].
+  int _searchFieldEpoch = 0;
+
+  /// Repository output, in relevance order — the source of truth from the last
+  /// search. Display lists are derived from these by [_applySort].
+  List<LineResult> _rawLineMatches = const [];
+  List<TitleResult> _rawTitleMatches = const [];
+
+  /// Display lists (sorted per [_sortMode]) that the list/pager read.
   List<LineResult> _lineMatches = const [];
   List<TitleResult> _titleMatches = const [];
+
+  /// How results are ordered. Loaded from (and saved to) persisted prefs.
+  SearchSort _sortMode = SearchSort.relevance;
 
   /// Current 0-based results page. Reset to 0 on every new search.
   int _page = 0;
@@ -60,6 +87,21 @@ class _HomePageState extends State<HomePage> {
     SourceFilterPrefs.load().then((order) {
       if (mounted) setState(() => _sourceOrder = order);
     });
+    SearchSortPrefs.load().then((sort) {
+      if (mounted) {
+        setState(() {
+          _sortMode = sort;
+          _applySort();
+        });
+      }
+    });
+  }
+
+  /// Derives the display lists from the raw (relevance-ordered) results per the
+  /// current [_sortMode] and source order. Cheap in-memory reorder — no DB hit.
+  void _applySort() {
+    _titleMatches = sortTitleResults(_rawTitleMatches, _sortMode, _sourceOrder);
+    _lineMatches = sortLineResults(_rawLineMatches, _sortMode, _sourceOrder);
   }
 
   @override
@@ -75,7 +117,70 @@ class _HomePageState extends State<HomePage> {
     if (result == null) return;
     setState(() => _sourceOrder = result);
     await SourceFilterPrefs.save(result);
-    if (_query.isNotEmpty) _runSearch(_query);
+    _rerunActiveSearch();
+  }
+
+  /// True when a search (plain box or boolean) is currently driving the results
+  /// area — used to decide between the empty hint and the results list/pager.
+  bool get _hasActiveSearch => _query.isNotEmpty || _boolExpr != null;
+
+  /// Re-runs whichever search is active (after a source-filter change).
+  void _rerunActiveSearch() {
+    if (_boolExpr != null) {
+      _runBooleanSearch(_boolExpr!);
+    } else if (_query.isNotEmpty) {
+      _runSearch(_query);
+    }
+  }
+
+  /// Opens the boolean-search window; on confirm, switches to boolean mode
+  /// (clearing the plain box) and runs it.
+  Future<void> _openBooleanSearch() async {
+    final result = await Navigator.of(context).push<BooleanSearchResult>(
+      MaterialPageRoute(
+        builder: (_) => BooleanSearchPage(initialExpression: _boolRaw),
+      ),
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      _boolExpr = result.expr;
+      _boolDescription = result.expr.describeArabic();
+      _boolRaw = result.raw;
+      _query = '';
+      _searchFieldEpoch++; // reset the plain box text
+      _isSearching = true;
+      _page = 0;
+    });
+    _runBooleanSearch(result.expr);
+  }
+
+  /// Clears the active boolean search and returns to the empty/plain state.
+  void _clearBooleanSearch() {
+    setState(() {
+      _boolExpr = null;
+      _boolDescription = null;
+      _boolRaw = '';
+      _titleMatches = const [];
+      _lineMatches = const [];
+      _rawTitleMatches = const [];
+      _rawLineMatches = const [];
+      _isSearching = false;
+      _page = 0;
+    });
+  }
+
+  /// Switches the result sort mode. Reorders the already-fetched results in
+  /// memory (no database query, no [_searchToken] change) and persists the
+  /// choice. Result counts are unchanged, so [_pageWindow] stays valid.
+  Future<void> _setSortMode(SearchSort mode) async {
+    if (mode == _sortMode) return;
+    setState(() {
+      _sortMode = mode;
+      _applySort();
+      _page = 0;
+    });
+    if (_resultsController.hasClients) _resultsController.jumpTo(0);
+    await SearchSortPrefs.save(mode);
   }
 
   void _focusFirstResult() {
@@ -89,6 +194,10 @@ class _HomePageState extends State<HomePage> {
   void _onQueryChanged(String query) {
     final trimmed = query.trim();
     _query = trimmed;
+    // Typing in the plain box takes over from any active boolean search.
+    _boolExpr = null;
+    _boolDescription = null;
+    _boolRaw = '';
     if (trimmed.isEmpty) {
       setState(() {
         _titleMatches = const [];
@@ -111,8 +220,28 @@ class _HomePageState extends State<HomePage> {
     // Drop stale results (a newer query started, or the box changed/emptied).
     if (!mounted || token != _searchToken || query != _query) return;
     setState(() {
-      _titleMatches = results[0] as List<TitleResult>;
-      _lineMatches = results[1] as List<LineResult>;
+      _rawTitleMatches = results[0] as List<TitleResult>;
+      _rawLineMatches = results[1] as List<LineResult>;
+      _applySort();
+      _isSearching = false;
+      _page = 0;
+    });
+  }
+
+  /// Boolean-mode counterpart of [_runSearch]: runs the parsed [expr] against
+  /// the boolean repository methods, with the same stale-result guard.
+  Future<void> _runBooleanSearch(BoolExpr expr) async {
+    final token = ++_searchToken;
+    final results = await Future.wait([
+      widget.repo.searchTitlesBoolean(expr, sourceOrder: _sourceOrder),
+      widget.repo.searchLinesBoolean(expr, sourceOrder: _sourceOrder),
+    ]);
+    // Drop stale results (a newer search started, or boolean mode was cleared).
+    if (!mounted || token != _searchToken || !identical(expr, _boolExpr)) return;
+    setState(() {
+      _rawTitleMatches = results[0] as List<TitleResult>;
+      _rawLineMatches = results[1] as List<LineResult>;
+      _applySort();
       _isSearching = false;
       _page = 0;
     });
@@ -163,9 +292,28 @@ class _HomePageState extends State<HomePage> {
             )),
           ),
           IconButton(
+            icon: const Icon(Icons.rule),
+            tooltip: 'بحث منطقي',
+            onPressed: _openBooleanSearch,
+          ),
+          IconButton(
             icon: const Icon(Icons.tune),
             tooltip: 'المصادر',
             onPressed: _openSourceFilter,
+          ),
+          PopupMenuButton<SearchSort>(
+            icon: const Icon(Icons.sort),
+            tooltip: 'ترتيب النتائج',
+            initialValue: _sortMode,
+            onSelected: _setSortMode,
+            itemBuilder: (_) => [
+              for (final sort in SearchSort.values)
+                CheckedPopupMenuItem(
+                  value: sort,
+                  checked: sort == _sortMode,
+                  child: Text(sort.label),
+                ),
+            ],
           ),
           IconButton(
             icon: const Icon(Icons.help_outline),
@@ -185,14 +333,21 @@ class _HomePageState extends State<HomePage> {
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
               child: SearchField(
+                key: ValueKey(_searchFieldEpoch),
                 focusNode: _searchFocusNode,
                 debounce: const Duration(seconds: 1),
                 onChanged: _onQueryChanged,
                 onSubmitted: _focusFirstResult,
               ),
             ),
+            if (_boolDescription != null)
+              _BooleanSearchBanner(
+                description: _boolDescription!,
+                onEdit: _openBooleanSearch,
+                onClear: _clearBooleanSearch,
+              ),
             Expanded(child: _buildResults()),
-            if (!_isSearching && _query.isNotEmpty && _pageWindow.totalPages > 1)
+            if (!_isSearching && _hasActiveSearch && _pageWindow.totalPages > 1)
               _ResultsPager(
                 page: _pageWindow.page,
                 totalPages: _pageWindow.totalPages,
@@ -210,7 +365,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildResults() {
-    if (_query.isEmpty) {
+    if (!_hasActiveSearch) {
       return const _EmptyHint(
         icon: Icons.search,
         message: 'اكتب كلمة للبحث في الأبيات.\n'
@@ -489,6 +644,61 @@ class _ResultsPager extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Banner shown above the results while a boolean search is active: the
+/// plain-Arabic explanation of the expression, with edit and clear actions.
+class _BooleanSearchBanner extends StatelessWidget {
+  const _BooleanSearchBanner({
+    required this.description,
+    required this.onEdit,
+    required this.onClear,
+  });
+
+  final String description;
+  final VoidCallback onEdit;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.rule,
+              size: 18, color: theme.colorScheme.onSecondaryContainer),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'بحث منطقي: $description',
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(color: theme.colorScheme.onSecondaryContainer),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.edit, size: 18),
+            tooltip: 'تعديل',
+            visualDensity: VisualDensity.compact,
+            color: theme.colorScheme.onSecondaryContainer,
+            onPressed: onEdit,
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 18),
+            tooltip: 'إلغاء البحث المنطقي',
+            visualDensity: VisualDensity.compact,
+            color: theme.colorScheme.onSecondaryContainer,
+            onPressed: onClear,
+          ),
+        ],
       ),
     );
   }

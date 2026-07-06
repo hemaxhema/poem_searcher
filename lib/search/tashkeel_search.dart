@@ -3,7 +3,9 @@
 ///
 /// Rules (see the plan / unit tests for worked examples):
 ///   1. A bare query letter matches that letter with any or no diacritic.
-///   2. A query letter followed by a diacritic requires exactly that diacritic.
+///   2. A query letter followed by a diacritic requires that diacritic to be
+///      present on the letter; extra diacritics on the same letter are still
+///      allowed (e.g. a shadda typed alone still matches shadda+fatha).
 ///   3. Punctuation, `=`, and tatweel are ignored in both query and text.
 ///   4. The match is anchored to word boundaries: the query's first letter
 ///      must start a word and its last letter must end a word.
@@ -194,7 +196,15 @@ String? buildRegexSource(String query) {
     if (dia.isEmpty) {
       sb.write('$diacClass*'); // rule 1: any/no diacritic
     } else {
-      sb.write(_escape(dia.toString())); // rule 2: exactly these diacritics
+      // Rule 2: every typed diacritic must be present on the letter (in any
+      // order); additional diacritics on the same letter are still allowed —
+      // e.g. a shadda typed alone still matches shadda+fatha, since a vowel
+      // commonly accompanies a shadda in fully-vocalized text.
+      final diaText = dia.toString();
+      for (var k = 0; k < diaText.length; k++) {
+        sb.write('(?=$diacClass*${_escape(diaText[k])})');
+      }
+      sb.write('$diacClass*');
     }
     hasLetter = true;
     i = j;

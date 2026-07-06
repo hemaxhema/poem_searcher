@@ -27,6 +27,9 @@ void main() {
     for (final t in <String>['حُمد', 'حمد']) {
       test('"$q" does NOT match "$t"', () => expect(matches(q, t), isFalse));
     }
+    test('shadda typed alone still matches shadda+fatha', () {
+      expect(matches('عليّ', 'عليَّ'), isTrue);
+    });
   });
 
   group('Rule 3 — punctuation, = and tatweel are ignored', () {

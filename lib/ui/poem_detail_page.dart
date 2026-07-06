@@ -41,6 +41,14 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
 
   final ScrollController _scrollController = ScrollController();
 
+  /// Attached to the bayt tile matching [PoemDetailPage.highlightLineId] so it
+  /// can be centred in the viewport once laid out (see [_maybeAutoScroll]).
+  final GlobalKey _highlightKey = GlobalKey();
+
+  /// Guards the one-shot auto-scroll to the searched line so it doesn't fire
+  /// again on later rebuilds (e.g. after prefs load or the user scrolls away).
+  bool _didAutoScroll = false;
+
   /// User-adjustable verse font size and inter-bayt spacing, loaded from (and
   /// saved to) persisted prefs so the choice survives app restarts.
   PoemDisplaySettings _display = PoemDisplaySettings.defaults;
@@ -70,6 +78,23 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
   void dispose() {
     _scrollController.dispose();
     super.dispose();
+  }
+
+  /// Scrolls the searched line to the centre of the viewport, once, after it
+  /// has been laid out. Called from a post-frame callback (so the tile's
+  /// context/geometry exists) and is a no-op until then, or if there is no
+  /// line to highlight.
+  void _maybeAutoScroll() {
+    if (_didAutoScroll || widget.highlightLineId == null) return;
+    final ctx = _highlightKey.currentContext;
+    if (ctx == null) return;
+    _didAutoScroll = true;
+    Scrollable.ensureVisible(
+      ctx,
+      alignment: 0.5,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
   }
 
   /// Returns the Kashida-justified display string for every line, memoized on
@@ -222,6 +247,13 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
                   fontSize: _display.fontSize,
                 );
             final scaler = MediaQuery.textScalerOf(context);
+            // Once the poem is laid out, bring the searched line to the centre
+            // of the viewport. Scheduled after the frame so the target tile's
+            // context/geometry exists; _maybeAutoScroll only fires once.
+            if (widget.highlightLineId != null && !_didAutoScroll) {
+              WidgetsBinding.instance
+                  .addPostFrameCallback((_) => _maybeAutoScroll());
+            }
             return LayoutBuilder(
               builder: (context, constraints) {
                 // Text width available inside a bayt tile: the viewport minus
@@ -234,27 +266,39 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
                     8 -
                     _BaytTile.reservedBadgeWidth;
                 final display = _displayFor(lines, verseStyle, scaler, available);
-                return ListView(
+                // SingleChildScrollView + Column (rather than a lazy ListView)
+                // so every bayt is laid out up front; this lets
+                // Scrollable.ensureVisible centre the searched line even when
+                // it starts far off-screen. Poems are bounded (tens of bayts),
+                // so eager layout is cheap.
+                return SingleChildScrollView(
                   controller: _scrollController,
                   padding:
                       const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
-                  children: [
-                    if (poem != null) _PoemHeader(poem: poem),
-                    const SizedBox(height: 8),
-                    for (final group in _groupByLineNumber(lines))
-                      _BaytTile(
-                        displayText: display[group.first.id] ?? group.first.line,
-                        highlighted:
-                            group.any((l) => l.id == widget.highlightLineId),
-                        primary: group.first,
-                        fontSize: _display.fontSize,
-                        fontFamily: _display.fontFamily,
-                        lineSpacing: _display.lineSpacing,
-                        variants: group.length > 1
-                            ? group.sublist(1)
-                            : const <PoemLine>[],
-                      ),
-                  ],
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (poem != null) _PoemHeader(poem: poem),
+                      const SizedBox(height: 8),
+                      for (final group in _groupByLineNumber(lines))
+                        _BaytTile(
+                          key: group.any((l) => l.id == widget.highlightLineId)
+                              ? _highlightKey
+                              : null,
+                          displayText:
+                              display[group.first.id] ?? group.first.line,
+                          highlighted:
+                              group.any((l) => l.id == widget.highlightLineId),
+                          primary: group.first,
+                          fontSize: _display.fontSize,
+                          fontFamily: _display.fontFamily,
+                          lineSpacing: _display.lineSpacing,
+                          variants: group.length > 1
+                              ? group.sublist(1)
+                              : const <PoemLine>[],
+                        ),
+                    ],
+                  ),
                 );
               },
             );
@@ -351,6 +395,7 @@ class _PoemHeader extends StatelessWidget {
 
 class _BaytTile extends StatelessWidget {
   const _BaytTile({
+    super.key,
     required this.displayText,
     required this.highlighted,
     required this.primary,
@@ -395,11 +440,11 @@ class _BaytTile extends StatelessWidget {
       height: 1.0,
       fontFamily: fontFamily,
       fontSize: fontSize,
+      // The searched line is flagged simply by colouring its text with the
+      // theme accent, avoiding any background/marker box that would have to
+      // cover the Arabic tashkeel rendering outside the strut-clamped line box.
+      color: highlighted ? theme.colorScheme.primary : null,
     );
-    final color = highlighted
-        ? theme.colorScheme.primaryContainer.withValues(alpha: 0.5)
-        : null;
-
     // Rendered as a single paragraph (rather than two side-by-side widgets)
     // so that RTL text selection/copy works correctly and always yields
     // "sadr = ajz" verbatim, matching the original source text.
@@ -407,11 +452,7 @@ class _BaytTile extends StatelessWidget {
 
     return Container(
       margin: EdgeInsets.symmetric(vertical: lineSpacing / 2),
-      padding: const EdgeInsets.symmetric(vertical: 0, horizontal: 4),
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(8),
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.center,
