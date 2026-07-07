@@ -30,6 +30,7 @@ typedef IndexProgress = void Function(String label, int done, int total);
 /// Builds the full search index in [db] (opened read-write). Idempotent: safe
 /// to re-run; already-present pieces are refreshed rather than duplicated.
 Future<void> buildSearchIndex(Database db, {IndexProgress? onProgress}) async {
+  await _ensureAliasTable(db);
   await _addPlainColumn(db);
   await _populatePlain(db, onProgress);
   await _buildFts(db, onProgress);
@@ -90,9 +91,15 @@ Future<void> _populatePlain(Database db, IndexProgress? onProgress) async {
 Future<void> _buildFts(Database db, IndexProgress? onProgress) async {
   onProgress?.call('بناء فهرس البحث', 0, 0);
   await db.execute('DROP TABLE IF EXISTS lines_fts');
+  // detail=none: the app only ever runs trigram-accelerated `LIKE`/`GLOB`
+  // over `plain` (never FTS5 MATCH/snippet/highlight/bm25, and there's only
+  // one column so column filtering is moot), so the per-occurrence column +
+  // byte-offset data detail=full stores is pure overhead here — dropping it
+  // cuts the index to roughly a fifth of its size (per sqlite.org/fts5.html).
   await db.execute(
     "CREATE VIRTUAL TABLE lines_fts USING fts5("
-    "plain, content='lines', content_rowid='id', tokenize='trigram')",
+    "plain, content='lines', content_rowid='id', tokenize='trigram', "
+    "detail=none)",
   );
   await db.execute("INSERT INTO lines_fts(lines_fts) VALUES('rebuild')");
 }
@@ -164,4 +171,37 @@ Future<void> _ensureIndexes(Database db) async {
       'CREATE INDEX IF NOT EXISTS idx_poem_source_name ON poem(source_name)',
     );
   }
+  // Provenance of merged duplicate poems (see tool/dedup_poems.dart): the
+  // source index backs the per-source search's EXISTS check; the poem index
+  // backs the detail-page "all merged sources" lookup.
+  if (await _hasTable(db, 'poem_alias')) {
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_poem_alias_source '
+      'ON poem_alias(source_name, poem_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_poem_alias_poem ON poem_alias(poem_id)',
+    );
+  }
+}
+
+/// Ensures the provenance table exists (empty is fine) so the app's per-source
+/// search `EXISTS (… poem_alias …)` clause is always valid, even on a DB that
+/// was never run through tool/dedup_poems.dart. Schema mirrors that tool.
+Future<void> _ensureAliasTable(Database db) async {
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS poem_alias (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      poem_id    INTEGER NOT NULL REFERENCES poem(id),
+      source_url TEXT, source_name TEXT,
+      poet TEXT, book TEXT, page TEXT, type TEXT
+    )''');
+}
+
+Future<bool> _hasTable(Database db, String table) async {
+  final rows = await db.rawQuery(
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+    [table],
+  );
+  return rows.isNotEmpty;
 }

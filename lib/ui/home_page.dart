@@ -13,11 +13,11 @@ import '../widgets/highlighted_text.dart';
 import '../widgets/search_field.dart';
 import '../widgets/section_header.dart';
 import '../widgets/source_badge.dart';
-import '../widgets/source_filter_dialog.dart';
 import 'boolean_search_page.dart';
 import 'poem_detail_page.dart';
 import 'poets_page.dart';
 import 'results_pagination.dart';
+import 'settings_page.dart';
 
 /// Main screen: a search bar with live tashkeel-aware results underneath.
 class HomePage extends StatefulWidget {
@@ -112,11 +112,21 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
-  Future<void> _openSourceFilter() async {
-    final result = await showSourceFilterDialog(context, _sourceOrder);
-    if (result == null) return;
-    setState(() => _sourceOrder = result);
-    await SourceFilterPrefs.save(result);
+  /// Opens the consolidated Settings page; on return, reloads the source
+  /// order/sort mode (mutated there now, not via an inline dialog/popup here)
+  /// and re-runs the active search since a source-order/subset change affects
+  /// which rows are fetched, not just their display order.
+  Future<void> _openSettings() async {
+    await Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const SettingsPage()));
+    if (!mounted) return;
+    final order = await SourceFilterPrefs.load();
+    final sort = await SearchSortPrefs.load();
+    setState(() {
+      _sourceOrder = order;
+      _sortMode = sort;
+      _applySort();
+    });
     _rerunActiveSearch();
   }
 
@@ -167,20 +177,6 @@ class _HomePageState extends State<HomePage> {
       _isSearching = false;
       _page = 0;
     });
-  }
-
-  /// Switches the result sort mode. Reorders the already-fetched results in
-  /// memory (no database query, no [_searchToken] change) and persists the
-  /// choice. Result counts are unchanged, so [_pageWindow] stays valid.
-  Future<void> _setSortMode(SearchSort mode) async {
-    if (mode == _sortMode) return;
-    setState(() {
-      _sortMode = mode;
-      _applySort();
-      _page = 0;
-    });
-    if (_resultsController.hasClients) _resultsController.jumpTo(0);
-    await SearchSortPrefs.save(mode);
   }
 
   void _focusFirstResult() {
@@ -297,23 +293,9 @@ class _HomePageState extends State<HomePage> {
             onPressed: _openBooleanSearch,
           ),
           IconButton(
-            icon: const Icon(Icons.tune),
-            tooltip: 'المصادر',
-            onPressed: _openSourceFilter,
-          ),
-          PopupMenuButton<SearchSort>(
-            icon: const Icon(Icons.sort),
-            tooltip: 'ترتيب النتائج',
-            initialValue: _sortMode,
-            onSelected: _setSortMode,
-            itemBuilder: (_) => [
-              for (final sort in SearchSort.values)
-                CheckedPopupMenuItem(
-                  value: sort,
-                  checked: sort == _sortMode,
-                  child: Text(sort.label),
-                ),
-            ],
+            icon: const Icon(Icons.settings),
+            tooltip: 'الإعدادات',
+            onPressed: _openSettings,
           ),
           IconButton(
             icon: const Icon(Icons.help_outline),

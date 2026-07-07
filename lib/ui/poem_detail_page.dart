@@ -7,10 +7,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../db/poem_repository.dart';
 import '../models/poem.dart';
 import '../models/poem_line.dart';
-import '../services/app_fonts.dart';
 import '../services/poem_display_prefs.dart';
 import '../util/kashida.dart';
-import '../widgets/poem_display_settings_dialog.dart';
 
 /// Shows a full poem: metadata header + every bayt, each rendered as a single
 /// "sadr = ajz" line (matching the original source text) so RTL selection
@@ -38,6 +36,10 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
   /// Poem metadata for the header/title, loaded on demand (the repository no
   /// longer preloads every poem into memory). Null until it resolves.
   Poem? _poem;
+
+  /// Every source this poem is available from (its own + any duplicates merged
+  /// into it), shown as chips/links in the header. Empty until it resolves.
+  List<({String name, String? url})> _sources = const [];
 
   final ScrollController _scrollController = ScrollController();
 
@@ -68,6 +70,9 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
     _linesFuture = widget.repo.linesOfPoem(widget.poemId);
     widget.repo.poemById(widget.poemId).then((poem) {
       if (mounted) setState(() => _poem = poem);
+    });
+    widget.repo.sourcesOfPoem(widget.poemId).then((sources) {
+      if (mounted) setState(() => _sources = sources);
     });
     PoemDisplayPrefs.load().then((settings) {
       if (mounted) setState(() => _display = settings);
@@ -198,17 +203,6 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
     );
   }
 
-  Future<void> _openDisplaySettings() async {
-    final result = await showPoemDisplaySettingsDialog(context, _display);
-    if (result == null) return;
-    setState(() {
-      _displayCache = null;
-      _display = result;
-    });
-    await PoemDisplayPrefs.save(result);
-    AppFonts.currentFamily.value = result.fontFamily;
-  }
-
   @override
   Widget build(BuildContext context) {
     final Poem? poem = _poem;
@@ -216,11 +210,6 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
       appBar: AppBar(
         title: Text(poem?.title ?? 'القصيدة'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.format_size),
-            tooltip: 'إعدادات العرض',
-            onPressed: _openDisplaySettings,
-          ),
           IconButton(
             icon: const Icon(Icons.copy),
             tooltip: 'نسخ القصيدة',
@@ -278,7 +267,8 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      if (poem != null) _PoemHeader(poem: poem),
+                      if (poem != null)
+                        _PoemHeader(poem: poem, sources: _sources),
                       const SizedBox(height: 8),
                       for (final group in _groupByLineNumber(lines))
                         _BaytTile(
@@ -321,15 +311,18 @@ Future<void> _openSourceUrl(BuildContext context, String url) async {
 }
 
 class _PoemHeader extends StatelessWidget {
-  const _PoemHeader({required this.poem});
+  const _PoemHeader({required this.poem, required this.sources});
 
   final Poem poem;
+
+  /// Every source the poem is available from (own + merged duplicates), each an
+  /// optional-URL pair; rendered as chips, tappable when a URL is present.
+  final List<({String name, String? url})> sources;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final chips = <String>[
-      if (poem.source != null) poem.source!.displayName,
       if ((poem.book ?? '').isNotEmpty) poem.book!,
       if ((poem.page ?? '').isNotEmpty) poem.page!,
       if ((poem.type ?? '').isNotEmpty) poem.type!,
@@ -355,16 +348,6 @@ class _PoemHeader extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              if ((poem.sourceUrl ?? '').isNotEmpty)
-                IconButton(
-                  icon: const Icon(Icons.open_in_new),
-                  iconSize: 18,
-                  tooltip: 'فتح رابط المصدر',
-                  visualDensity: VisualDensity.compact,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  onPressed: () => _openSourceUrl(context, poem.sourceUrl!),
-                ),
               const SizedBox(width: 12),
               Wrap(
                 alignment: WrapAlignment.start,
@@ -377,6 +360,7 @@ class _PoemHeader extends StatelessWidget {
                     style: theme.textTheme.bodyMedium
                         ?.copyWith(color: theme.colorScheme.primary),
                   ),
+                  for (final source in sources) _SourceChip(source: source),
                   for (final c in chips)
                     Chip(
                       label: Text(c),
@@ -389,6 +373,34 @@ class _PoemHeader extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// A source chip: tapping it opens that source's URL (with an open-in-new
+/// affordance) when one is available; otherwise it's a plain label chip.
+class _SourceChip extends StatelessWidget {
+  const _SourceChip({required this.source});
+
+  final ({String name, String? url}) source;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = source.url;
+    if (url == null || url.isEmpty) {
+      return Chip(
+        label: Text(source.name),
+        visualDensity: VisualDensity.compact,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      );
+    }
+    return ActionChip(
+      avatar: const Icon(Icons.open_in_new, size: 16),
+      label: Text(source.name),
+      tooltip: 'فتح رابط المصدر',
+      visualDensity: VisualDensity.compact,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      onPressed: () => _openSourceUrl(context, url),
     );
   }
 }

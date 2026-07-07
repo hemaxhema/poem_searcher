@@ -8,6 +8,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import '../models/poem.dart';
 import '../models/poem_line.dart';
 import '../models/source.dart';
+import 'memory_preset.dart';
 import '../search/boolean_query.dart';
 import '../search/tashkeel_search.dart';
 import 'search_index.dart';
@@ -20,7 +21,7 @@ const String _dbFileName = 'DB_Poems.db';
 
 /// Bump this whenever a new database asset ships so the previously copied
 /// writable file is refreshed on next launch (see [_ensureWritableDbCopy]).
-const String _dbAssetVersion = '5';
+const String _dbAssetVersion = '7';
 
 /// Upper bound on rows pulled from the coarse SQL filter before the precise
 /// regex confirms them. Keeps a broad query from scanning the whole table.
@@ -122,7 +123,10 @@ class PoemRepository {
   /// location and builds the `plain` / `title_plain` / trigram-FTS search index
   /// there. That is a one-time, multi-minute step whose progress is reported via
   /// [onIndexProgress]; later launches reuse the built copy and open instantly.
-  static Future<PoemRepository> open({IndexProgress? onIndexProgress}) async {
+  static Future<PoemRepository> open({
+    IndexProgress? onIndexProgress,
+    MemoryPreset preset = MemoryPreset.high,
+  }) async {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
 
@@ -131,7 +135,7 @@ class PoemRepository {
       dbPath,
       options: OpenDatabaseOptions(readOnly: true),
     );
-    await _tuneForReads(db);
+    await _tuneForReads(db, preset);
     final repo = PoemRepository._(db);
     await repo._loadPoets();
     return repo;
@@ -140,17 +144,20 @@ class PoemRepository {
   /// Applies read-tuning PRAGMAs to a freshly opened connection. These are
   /// per-connection (not persisted in the file) so they run on every [open].
   ///
-  /// The database is a large (~1.9 GB) read-only asset, and search is dominated
-  /// by I/O over the trigram `LIKE` scans (and the short-probe fallback full
-  /// scan). A big memory-mapped window avoids per-page syscalls/copies, a larger
-  /// page cache keeps hot pages resident across the per-source queries, and
-  /// in-memory temp storage speeds any transient sort. No schema change, so no
+  /// The database is a large read-only asset, and search is dominated by I/O
+  /// over the trigram `LIKE` scans (and the short-probe fallback full scan). A
+  /// memory-mapped window sized well past the file lets the OS page the whole
+  /// file into virtual memory instead of round-tripping through SQLite's own
+  /// page cache. [preset] lets a user on a constrained machine turn this down
+  /// from the generous desktop-sized default (mmap is a virtual reservation,
+  /// not committed RAM, so over-sizing it past the file is normally cheap).
+  /// In-memory temp storage speeds any transient sort. No schema change, so no
   /// [_dbAssetVersion] bump is needed. Best-effort: a rejected PRAGMA must not
   /// stop the app from opening.
-  static Future<void> _tuneForReads(Database db) async {
+  static Future<void> _tuneForReads(Database db, MemoryPreset preset) async {
     try {
-      await db.execute('PRAGMA mmap_size=268435456;'); // 256 MB mmap I/O
-      await db.execute('PRAGMA cache_size=-65536;'); // 64 MB page cache (KB)
+      await db.execute('PRAGMA mmap_size=${preset.mmapSize};');
+      await db.execute('PRAGMA cache_size=${preset.cacheSizeKb};');
       await db.execute('PRAGMA temp_store=MEMORY;');
       await db.execute('PRAGMA query_only=ON;');
     } catch (_) {
@@ -236,6 +243,43 @@ class PoemRepository {
       [poet],
     );
     return rows.map(Poem.fromRow).toList();
+  }
+
+  /// Every data source this poem is available from — its own, plus those of any
+  /// duplicate poems merged into it (see `poem_alias`) — as `(name, url)` pairs,
+  /// deduplicated by source name (preferring an entry that carries a URL). Lets
+  /// the detail page link out to each source that held a copy of the poem.
+  Future<List<({String name, String? url})>> sourcesOfPoem(int poemId) async {
+    final byName = <String, String?>{};
+    void add(String? name, String? url) {
+      if (name == null || name.isEmpty) return;
+      final hasUrl = url != null && url.isNotEmpty;
+      if (!byName.containsKey(name) || (byName[name] == null && hasUrl)) {
+        byName[name] = hasUrl ? url : byName[name];
+      }
+    }
+
+    final own = await _db.rawQuery(
+      'SELECT source_name, source_url FROM poem WHERE id = ?',
+      [poemId],
+    );
+    for (final r in own) {
+      add(r['source_name'] as String?, r['source_url'] as String?);
+    }
+    // poem_alias is guaranteed to exist by the first-run index build, but guard
+    // anyway so a pre-dedup DB still works.
+    try {
+      final aliases = await _db.rawQuery(
+        'SELECT source_name, source_url FROM poem_alias WHERE poem_id = ?',
+        [poemId],
+      );
+      for (final r in aliases) {
+        add(r['source_name'] as String?, r['source_url'] as String?);
+      }
+    } catch (_) {
+      // poem_alias absent (DB predates dedup) — own source is enough.
+    }
+    return [for (final e in byName.entries) (name: e.key, url: e.value)];
   }
 
   /// Lines of a poem, ordered for display.
@@ -425,7 +469,9 @@ class PoemRepository {
       where.add('poet = ?');
       args.add(poet);
     }
-    where.add('source_name = ?');
+    where.add('(source_name = ? OR EXISTS (SELECT 1 FROM poem_alias a '
+        'WHERE a.poem_id = poem.id AND a.source_name = ?))');
+    args.add(source.displayName);
     args.add(source.displayName);
 
     final whereSql = 'WHERE ${where.join(' AND ')}';
@@ -449,11 +495,19 @@ class PoemRepository {
 
     if (probe.canUseIndex) {
       // Trigram-accelerated substring lookup over the pre-normalized text.
+      // Deliberately no `ESCAPE` clause: confirmed empirically (EXPLAIN QUERY
+      // PLAN) that adding one — even with the pattern otherwise identical —
+      // makes SQLite silently fall back to a full virtual-table scan instead
+      // of using the trigram index (tens of times slower on this database).
+      // Safe without it: this is only a coarse pre-filter that the precise
+      // Dart regex confirms exactly afterward, so a probe that happened to
+      // contain a literal `%`/`_` would just make this filter a bit more
+      // permissive — never cause a true match to be missed.
       from = 'lines_fts f '
           'JOIN lines l ON l.id = f.rowid '
           'JOIN poem p ON p.id = l.poem_id';
-      where.add("f.plain LIKE ? ESCAPE '\\'");
-      args.add('%${_escapeLike(probe.probe)}%');
+      where.add('f.plain LIKE ?');
+      args.add('%${probe.probe}%');
     } else {
       // Probe too short for the trigram index (or empty): fall back to a
       // bounded scan on the plain column, leaning on LIMIT + regex confirm.
@@ -467,7 +521,9 @@ class PoemRepository {
       where.add('p.poet = ?');
       args.add(poet);
     }
-    where.add('p.source_name = ?');
+    where.add('(p.source_name = ? OR EXISTS (SELECT 1 FROM poem_alias a '
+        'WHERE a.poem_id = p.id AND a.source_name = ?))');
+    args.add(source.displayName);
     args.add(source.displayName);
 
     final whereSql = 'WHERE ${where.join(' AND ')}';
@@ -495,11 +551,12 @@ class PoemRepository {
 
     final driver = expr.mandatoryDriver();
     if (driver != null) {
+      // No `ESCAPE` clause — see _coarseCandidates for why.
       from = 'lines_fts f '
           'JOIN lines l ON l.id = f.rowid '
           'JOIN poem p ON p.id = l.poem_id';
-      where.add("f.plain LIKE ? ESCAPE '\\'");
-      args.add('%${_escapeLike(driver)}%');
+      where.add('f.plain LIKE ?');
+      args.add('%$driver%');
     } else {
       from = 'lines l JOIN poem p ON p.id = l.poem_id';
     }
@@ -509,7 +566,9 @@ class PoemRepository {
       where.add('p.poet = ?');
       args.add(poet);
     }
-    where.add('p.source_name = ?');
+    where.add('(p.source_name = ? OR EXISTS (SELECT 1 FROM poem_alias a '
+        'WHERE a.poem_id = p.id AND a.source_name = ?))');
+    args.add(source.displayName);
     args.add(source.displayName);
 
     final whereSql = 'WHERE ${where.join(' AND ')}';
@@ -538,7 +597,9 @@ class PoemRepository {
       where.add('poet = ?');
       args.add(poet);
     }
-    where.add('source_name = ?');
+    where.add('(source_name = ? OR EXISTS (SELECT 1 FROM poem_alias a '
+        'WHERE a.poem_id = poem.id AND a.source_name = ?))');
+    args.add(source.displayName);
     args.add(source.displayName);
 
     final whereSql = 'WHERE ${where.join(' AND ')}';
@@ -550,7 +611,9 @@ class PoemRepository {
   }
 
   /// Escapes the SQL `LIKE` metacharacters (`%`, `_`, `\`) so the probe is
-  /// matched literally under `ESCAPE '\'`.
+  /// matched literally under `ESCAPE '\'`. Only used for `LIKE` against a
+  /// plain column (never the trigram FTS table — see _coarseCandidates for
+  /// why `ESCAPE` must not be added there).
   static String _escapeLike(String s) =>
       s.replaceAllMapped(RegExp(r'[\\%_]'), (m) => '\\${m[0]}');
 

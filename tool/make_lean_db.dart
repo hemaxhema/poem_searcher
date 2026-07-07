@@ -56,6 +56,8 @@ Future<void> main(List<String> args) async {
       'idx_lines_poem',
       'idx_poem_poet',
       'idx_poem_source_name',
+      'idx_poem_alias_poem',
+      'idx_poem_alias_source',
     ]) {
       await db.execute('DROP INDEX IF EXISTS $idx');
     }

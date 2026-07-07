@@ -3,6 +3,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'db/poem_repository.dart';
 import 'services/app_fonts.dart';
+import 'services/memory_preset_prefs.dart';
 import 'services/poem_display_prefs.dart';
 import 'ui/home_page.dart';
 
@@ -57,8 +58,15 @@ class _BootstrapState extends State<_Bootstrap> {
   /// First-run index-build progress text, or `null` when there is no build in
   /// progress (already indexed, so startup is near-instant).
   final ValueNotifier<String?> _status = ValueNotifier<String?>(null);
-  late final Future<PoemRepository> _repoFuture =
-      PoemRepository.open(onIndexProgress: _onIndexProgress);
+  late final Future<PoemRepository> _repoFuture = _openRepo();
+
+  Future<PoemRepository> _openRepo() async {
+    final preset = await MemoryPresetPrefs.load();
+    return PoemRepository.open(
+      onIndexProgress: _onIndexProgress,
+      preset: preset,
+    );
+  }
 
   void _onIndexProgress(String label, int done, int total) {
     _status.value = total > 0
