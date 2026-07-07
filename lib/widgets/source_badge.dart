@@ -25,3 +25,30 @@ class SourceBadge extends StatelessWidget {
     );
   }
 }
+
+/// Lists every source a duplicated result was found under (the one already
+/// shown plus each hidden duplicate's source) in a simple dialog.
+void showDuplicateSourcesDialog(BuildContext context, List<Source> sources) {
+  showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('مصادر أخرى'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: SingleChildScrollView(
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [for (final s in sources) SourceBadge(source: s)],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('إغلاق'),
+        ),
+      ],
+    ),
+  );
+}

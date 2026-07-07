@@ -18,19 +18,18 @@ void main() {
     );
   });
 
-  test('byId resolves each real id and falls back to high otherwise', () {
+  test('byId resolves each real id and falls back to balanced otherwise', () {
     expect(MemoryPreset.byId('low'), MemoryPreset.low);
     expect(MemoryPreset.byId('balanced'), MemoryPreset.balanced);
-    expect(MemoryPreset.byId('high'), MemoryPreset.high);
-    expect(MemoryPreset.byId(null), MemoryPreset.high);
-    expect(MemoryPreset.byId('unknown'), MemoryPreset.high);
+    expect(MemoryPreset.byId(null), MemoryPreset.balanced);
+    expect(MemoryPreset.byId('unknown'), MemoryPreset.balanced);
   });
 
   group('MemoryPresetPrefs', () {
     setUp(() => SharedPreferences.setMockInitialValues({}));
 
-    test('defaults to high when nothing saved', () async {
-      expect(await MemoryPresetPrefs.load(), MemoryPreset.high);
+    test('defaults to balanced when nothing saved', () async {
+      expect(await MemoryPresetPrefs.load(), MemoryPreset.balanced);
     });
 
     test('save then load round-trips every preset', () async {

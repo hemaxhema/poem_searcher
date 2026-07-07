@@ -4,10 +4,12 @@ import 'package:flutter/services.dart';
 import '../db/poem_repository.dart';
 import '../models/source.dart';
 import '../search/boolean_query.dart';
+import '../search/result_dedup.dart';
 import '../search/search_sort.dart';
 import '../services/app_fonts.dart';
 import '../services/search_sort_prefs.dart';
 import '../services/source_filter_prefs.dart';
+import '../widgets/count_badge.dart';
 import '../widgets/help_dialog.dart';
 import '../widgets/highlighted_text.dart';
 import '../widgets/search_field.dart';
@@ -53,9 +55,12 @@ class _HomePageState extends State<HomePage> {
   List<LineResult> _rawLineMatches = const [];
   List<TitleResult> _rawTitleMatches = const [];
 
-  /// Display lists (sorted per [_sortMode]) that the list/pager read.
-  List<LineResult> _lineMatches = const [];
-  List<TitleResult> _titleMatches = const [];
+  /// Display lists (sorted per [_sortMode], then grouped per [_applySort]):
+  /// one entry per distinct poem/line, each carrying the other matches
+  /// (other sources, or other un-merged poem rows with the same wording)
+  /// collapsed into it. Read by the list/pager.
+  List<ResultGroup<LineResult>> _lineMatches = const [];
+  List<ResultGroup<TitleResult>> _titleMatches = const [];
 
   /// How results are ordered. Loaded from (and saved to) persisted prefs.
   SearchSort _sortMode = SearchSort.relevance;
@@ -98,10 +103,18 @@ class _HomePageState extends State<HomePage> {
   }
 
   /// Derives the display lists from the raw (relevance-ordered) results per the
-  /// current [_sortMode] and source order. Cheap in-memory reorder — no DB hit.
+  /// current [_sortMode] and source order, then collapses same-wording results
+  /// (matched under several merged sources, or catalogued as separate un-merged
+  /// poem rows) down to a single tile per distinct poem/line — the first-priority
+  /// source; the rest surface via a badge (see [_TitleResultTile]/
+  /// [_LineResultTile]). Cheap in-memory work — no DB hit.
   void _applySort() {
-    _titleMatches = sortTitleResults(_rawTitleMatches, _sortMode, _sourceOrder);
-    _lineMatches = sortLineResults(_rawLineMatches, _sortMode, _sourceOrder);
+    final sortedTitles =
+        sortTitleResults(_rawTitleMatches, _sortMode, _sourceOrder);
+    final sortedLines =
+        sortLineResults(_rawLineMatches, _sortMode, _sourceOrder);
+    _titleMatches = groupTitleResults(sortedTitles);
+    _lineMatches = groupLineResults(sortedLines);
   }
 
   @override
@@ -329,7 +342,9 @@ class _HomePageState extends State<HomePage> {
                 onClear: _clearBooleanSearch,
               ),
             Expanded(child: _buildResults()),
-            if (!_isSearching && _hasActiveSearch && _pageWindow.totalPages > 1)
+            if (!_isSearching &&
+                _hasActiveSearch &&
+                (_titleMatches.isNotEmpty || _lineMatches.isNotEmpty))
               _ResultsPager(
                 page: _pageWindow.page,
                 totalPages: _pageWindow.totalPages,
@@ -386,22 +401,24 @@ class _HomePageState extends State<HomePage> {
             return SectionHeader('عناوين (${_titleMatches.length})');
           }
           final i = index - 1;
-          final match = _titleMatches[window.titleStart + i];
+          final group = _titleMatches[window.titleStart + i];
           return _TitleResultTile(
-            match: match,
+            match: group.shown,
+            duplicates: group.duplicates,
             focusNode: i == 0 ? _firstResultFocusNode : null,
-            onTap: () => _openPoem(match.poemId),
+            onTap: () => _openPoem(group.shown.poemId),
           );
         }
         if (index == lineHeaderIndex) {
           return SectionHeader('أبيات (${_lineMatches.length})');
         }
         final i = index - lineHeaderIndex - 1;
-        final match = _lineMatches[window.lineStart + i];
+        final group = _lineMatches[window.lineStart + i];
         return _LineResultTile(
-          match: match,
+          match: group.shown,
+          duplicates: group.duplicates,
           focusNode: (!hasTitles && i == 0) ? _firstResultFocusNode : null,
-          onTap: () => _openPoem(match.poemId, lineId: match.lineId),
+          onTap: () => _openPoem(group.shown.poemId, lineId: group.shown.lineId),
         );
       },
     );
@@ -412,11 +429,16 @@ class _LineResultTile extends StatelessWidget {
   const _LineResultTile({
     required this.match,
     required this.onTap,
+    this.duplicates = const [],
     this.focusNode,
   });
 
   final LineResult match;
   final VoidCallback onTap;
+
+  /// Copies of this same verse matched under other (lower-priority) sources,
+  /// hidden behind a [CountBadge] that opens [showDuplicateSourcesDialog].
+  final List<LineResult> duplicates;
   final FocusNode? focusNode;
 
   @override
@@ -453,6 +475,17 @@ class _LineResultTile extends StatelessWidget {
               Row(
                 children: [
                   SourceBadge(source: match.source),
+                  if (duplicates.isNotEmpty) ...[
+                    const SizedBox(width: 4),
+                    CountBadge(
+                      count: duplicates.length,
+                      tooltip: 'مصادر أخرى لهذا البيت',
+                      onTap: () => showDuplicateSourcesDialog(
+                        context,
+                        [match.source, ...duplicates.map((d) => d.source)],
+                      ),
+                    ),
+                  ],
                   const SizedBox(width: 8),
                   if (match.lineCount > 0) ...[
                     _LineCountBadge(count: match.lineCount),
@@ -481,11 +514,16 @@ class _TitleResultTile extends StatelessWidget {
   const _TitleResultTile({
     required this.match,
     required this.onTap,
+    this.duplicates = const [],
     this.focusNode,
   });
 
   final TitleResult match;
   final VoidCallback onTap;
+
+  /// Copies of this same poem matched under other (lower-priority) sources,
+  /// hidden behind a [CountBadge] that opens [showDuplicateSourcesDialog].
+  final List<TitleResult> duplicates;
   final FocusNode? focusNode;
 
   @override
@@ -518,6 +556,17 @@ class _TitleResultTile extends StatelessWidget {
               Row(
                 children: [
                   SourceBadge(source: match.source),
+                  if (duplicates.isNotEmpty) ...[
+                    const SizedBox(width: 4),
+                    CountBadge(
+                      count: duplicates.length,
+                      tooltip: 'مصادر أخرى لهذا العنوان',
+                      onTap: () => showDuplicateSourcesDialog(
+                        context,
+                        [match.source, ...duplicates.map((d) => d.source)],
+                      ),
+                    ),
+                  ],
                   const SizedBox(width: 8),
                   if (match.lineCount > 0) ...[
                     _LineCountBadge(count: match.lineCount),

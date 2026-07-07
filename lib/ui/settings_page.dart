@@ -27,7 +27,7 @@ class _SettingsPageState extends State<SettingsPage> {
   List<Source> _sourceOrder = Source.values;
   SearchSort _sortMode = SearchSort.relevance;
   PoemDisplaySettings _display = PoemDisplaySettings.defaults;
-  MemoryPreset _memoryPreset = MemoryPreset.high;
+  MemoryPreset _memoryPreset = MemoryPreset.balanced;
 
   @override
   void initState() {

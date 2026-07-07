@@ -125,7 +125,7 @@ class PoemRepository {
   /// [onIndexProgress]; later launches reuse the built copy and open instantly.
   static Future<PoemRepository> open({
     IndexProgress? onIndexProgress,
-    MemoryPreset preset = MemoryPreset.high,
+    MemoryPreset preset = MemoryPreset.balanced,
   }) async {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
