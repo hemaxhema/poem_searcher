@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../models/poem.dart';
@@ -16,11 +15,11 @@ import 'search_index.dart';
 /// Path of the database bundled as a Flutter asset.
 const String _assetDbPath = 'assets/database/DB_Poems.db';
 
-/// File name of the writable copy in the app-support directory.
+/// File name of the writable copy kept next to the executable.
 const String _dbFileName = 'DB_Poems.db';
 
 /// Bump this whenever a new database asset ships so the previously copied
-/// writable file is refreshed on next launch (see [_ensureWritableDbCopy]).
+/// writable file is refreshed on next launch (see [_prepareDatabase]).
 const String _dbAssetVersion = '10';
 
 /// Upper bound on rows pulled from the coarse SQL filter before the precise
@@ -185,9 +184,17 @@ class PoemRepository {
   /// its path. The version marker is written only *after* a successful index
   /// build, so an interrupted first run re-copies and rebuilds on the next
   /// launch instead of leaving a half-built database in use.
+  ///
+  /// Stored next to the executable (inside the install directory) rather than
+  /// in per-user app-data, so uninstalling the program — which removes its
+  /// install directory — takes the writable database with it. This requires
+  /// the install directory (or at least this `db` subfolder) to be writable by
+  /// the user running the app; a system-wide install under Program Files must
+  /// grant that explicitly (e.g. an Inno Setup `Permissions: users-modify` on
+  /// this subfolder), since standard users can't otherwise write there.
   static Future<String> _prepareDatabase(IndexProgress? onProgress) async {
-    final supportDir = await getApplicationSupportDirectory();
-    final target = p.join(supportDir.path, _dbFileName);
+    final installDir = p.dirname(Platform.resolvedExecutable);
+    final target = p.join(installDir, 'db', _dbFileName);
     final marker = File('$target.version');
 
     final ready = await File(target).exists() &&

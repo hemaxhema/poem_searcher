@@ -47,3 +47,32 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Windows/Desktop build artifacts
+/build/windows/x64/runner/Release/
+/build/windows/x64/runner/Debug/
+/windows/flutter/generated_plugin*
+windows/runner/Release/
+windows/runner/Debug/
+*.lib
+*.exp
+*.pdb
+
+# IDE specific files
+.vscode/settings.json
+.vscode/launch.json
+.vscode/extensions.json
+.vscode/*.json
+*.code-workspace
+
+# OS specific files
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Project specific
+/app_data/
+/local_storage/
+*.lock
+user_preferences.json
