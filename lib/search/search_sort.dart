@@ -8,11 +8,12 @@ import 'tashkeel_search.dart';
 /// [sortLineResults]/[sortTitleResults]), so switching modes reorders in memory
 /// with no database query.
 enum SearchSort {
-  /// The default: most-relevant first (by [matchTightness]), which is the order
-  /// the repository already emits.
+  /// Most-relevant first (by [matchTightness]), which is the order the
+  /// repository already emits.
   relevance('relevance', 'الأكثر صلة'),
 
-  /// Longest poems first (by `poem.line_count`), still grouped by source.
+  /// The default: longest poems first (by `poem.line_count`), still grouped
+  /// by source.
   lineCountDesc('line_count_desc', 'الأطول (عدد الأبيات)');
 
   const SearchSort(this.id, this.label);
@@ -23,9 +24,9 @@ enum SearchSort {
   /// Arabic label shown in the sort menu.
   final String label;
 
-  /// The mode with the given [id], or [relevance] for an unknown/absent id.
+  /// The mode with the given [id], or [lineCountDesc] for an unknown/absent id.
   static SearchSort byId(String? id) =>
-      values.firstWhere((s) => s.id == id, orElse: () => relevance);
+      values.firstWhere((s) => s.id == id, orElse: () => lineCountDesc);
 }
 
 /// Reorders confirmed line results according to [sort], preserving the

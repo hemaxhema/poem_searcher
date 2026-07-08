@@ -5,6 +5,9 @@ import 'db/poem_repository.dart';
 import 'services/app_fonts.dart';
 import 'services/memory_preset_prefs.dart';
 import 'services/poem_display_prefs.dart';
+import 'services/results_display_prefs.dart';
+import 'services/theme_mode_prefs.dart';
+import 'theme/app_theme.dart';
 import 'ui/home_page.dart';
 
 Future<void> main() async {
@@ -12,6 +15,11 @@ Future<void> main() async {
   await AppFonts.discoverAndLoad();
   AppFonts.currentFamily.value =
       (await PoemDisplayPrefs.load()).fontFamily;
+  AppFonts.currentResultsFontSize.value = await ResultsDisplayPrefs.load();
+  final savedThemeMode = await ThemeModePrefs.load();
+  if (savedThemeMode != null) {
+    AppTheme.currentMode.value = savedThemeMode;
+  }
   runApp(const PoemSearcherApp());
 }
 
@@ -20,27 +28,25 @@ class PoemSearcherApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'البحث في الشعر',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorSchemeSeed: const Color(0xFF00695C),
-        brightness: Brightness.light,
-      ),
-      darkTheme: ThemeData(
-        useMaterial3: true,
-        colorSchemeSeed: const Color(0xFF00695C),
-        brightness: Brightness.dark,
-      ),
-      locale: const Locale('ar'),
-      supportedLocales: const [Locale('ar')],
-      localizationsDelegates: const [
-        GlobalMaterialLocalizations.delegate,
-        GlobalWidgetsLocalizations.delegate,
-        GlobalCupertinoLocalizations.delegate,
-      ],
-      home: const _Bootstrap(),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: AppTheme.currentMode,
+      builder: (context, themeMode, _) {
+        return MaterialApp(
+          title: 'البحث في الشعر',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.day,
+          darkTheme: AppTheme.night,
+          themeMode: themeMode,
+          locale: const Locale('ar'),
+          supportedLocales: const [Locale('ar')],
+          localizationsDelegates: const [
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: const _Bootstrap(),
+        );
+      },
     );
   }
 }
@@ -119,7 +125,7 @@ class _BootstrapState extends State<_Bootstrap> {
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 child: Text(
-                  'جارٍ تجهيز فهرس البحث لأول مرة، قد يستغرق بضع دقائق.\n$status',
+                  'جارٍ تجهيز فهرس البحث، يحدث مرة واحدة، قد يستغرق بضع دقائق.\n$status',
                   textAlign: TextAlign.center,
                 ),
               ),

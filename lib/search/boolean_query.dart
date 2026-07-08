@@ -29,10 +29,11 @@ sealed class BoolExpr {
   const BoolExpr();
 
   /// Confirms the whole expression against a line's [original] text and returns
-  /// the highlight span of the first matching *positive* leaf, or `null` if the
-  /// line does not satisfy the expression. A satisfied expression with no
-  /// positive span to show (e.g. a purely-negative group) returns `(-1, -1)`.
-  ({int start, int end})? match(String original);
+  /// the highlight spans of every matching *positive* leaf (in [parts]/[options]
+  /// order), or `null` if the line does not satisfy the expression. The list may
+  /// be empty for a satisfied expression with no positive span to show (e.g. a
+  /// purely-negative group).
+  List<({int start, int end})>? match(String original);
 
   /// True when the expression is anchored by at least one positive term, so a
   /// bounded result set exists. A NOT-only expression (`-فراق`) is not.
@@ -62,10 +63,10 @@ class OrExpr extends BoolExpr {
   final List<BoolExpr> options;
 
   @override
-  ({int start, int end})? match(String original) {
+  List<({int start, int end})>? match(String original) {
     for (final option in options) {
-      final span = option.match(original);
-      if (span != null) return span;
+      final spans = option.match(original);
+      if (spans != null) return spans;
     }
     return null;
   }
@@ -106,18 +107,18 @@ class AndExpr extends BoolExpr {
   final List<PartOf> parts;
 
   @override
-  ({int start, int end})? match(String original) {
-    ({int start, int end})? span;
+  List<({int start, int end})>? match(String original) {
+    final spans = <({int start, int end})>[];
     for (final part in parts) {
       if (part.negate) {
         if (part.child.match(original) != null) return null; // must NOT match
       } else {
         final s = part.child.match(original);
         if (s == null) return null; // required part missing
-        span ??= s;
+        spans.addAll(s);
       }
     }
-    return span ?? (start: -1, end: -1);
+    return spans;
   }
 
   @override
@@ -181,8 +182,10 @@ class TermLeaf extends BoolExpr {
   final CoarseProbe probe;
 
   @override
-  ({int start, int end})? match(String original) =>
-      confirmSpan(original, regex);
+  List<({int start, int end})>? match(String original) {
+    final span = confirmSpan(original, regex);
+    return span == null ? null : [span];
+  }
 
   @override
   bool get hasPositive => true;

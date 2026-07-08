@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../db/poem_repository.dart';
+import '../widgets/common_app_bar_actions.dart';
 import '../widgets/search_field.dart';
 import 'poet_poems_page.dart';
 
@@ -36,37 +37,47 @@ class _PoetsPageState extends State<PoetsPage> {
   Widget build(BuildContext context) {
     final poets = _poets;
     return Scaffold(
-      appBar: AppBar(title: const Text('الشعراء')),
+      appBar: AppBar(
+        title: const Text('الشعراء'),
+        actions: const [CommonAppBarActions()],
+      ),
       body: CallbackShortcuts(
         bindings: {
           const SingleActivator(LogicalKeyboardKey.keyF, control: true): () {
             _searchFocusNode.requestFocus();
           },
         },
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: SearchField(
-                hintText: 'ابحث عن شاعر…',
-                autofocus: false,
-                focusNode: _searchFocusNode,
-                onChanged: _onQueryChanged,
+        // CallbackShortcuts only fires while focus is within its subtree, so
+        // wrap the content in an autofocus node that acts as a fallback focus
+        // holder whenever nothing else (search field, a list item) has focus.
+        child: Focus(
+          autofocus: true,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: SearchField(
+                  hintText: 'ابحث عن شاعر…',
+                  autofocus: false,
+                  focusNode: _searchFocusNode,
+                  onChanged: _onQueryChanged,
+                ),
               ),
-            ),
-            Expanded(
-              child: poets.isEmpty
-                  ? const Center(child: Text('لا توجد نتائج.'))
-                  : ListView.separated(
+              Expanded(
+                child: poets.isEmpty
+                    ? const Center(child: Text('لا توجد نتائج.'))
+                    : ListView.separated(
                       padding: const EdgeInsets.all(12),
                       itemCount: poets.length,
                       separatorBuilder: (_, _) => const SizedBox(height: 4),
                       itemBuilder: (context, i) {
                         final poet = poets[i];
+                        final count = widget.repo.poemCountFor(poet);
                         return Card(
                           child: ListTile(
                             leading: const Icon(Icons.person),
                             title: Text(poet),
+                            subtitle: Text('$count قصيدة'),
                             trailing: const Icon(Icons.chevron_left),
                             onTap: () => Navigator.of(context).push(
                               MaterialPageRoute(
@@ -78,8 +89,9 @@ class _PoetsPageState extends State<PoetsPage> {
                         );
                       },
                     ),
-            ),
-          ],
+              ),
+            ],
+          ),
         ),
       ),
     );

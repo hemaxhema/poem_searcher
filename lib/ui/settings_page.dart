@@ -6,8 +6,10 @@ import '../search/search_sort.dart';
 import '../services/app_fonts.dart';
 import '../services/memory_preset_prefs.dart';
 import '../services/poem_display_prefs.dart';
+import '../services/results_display_prefs.dart';
 import '../services/search_sort_prefs.dart';
 import '../services/source_filter_prefs.dart';
+import '../widgets/common_app_bar_actions.dart';
 import '../widgets/poem_display_settings_dialog.dart';
 import '../widgets/section_header.dart';
 import '../widgets/source_filter_dialog.dart';
@@ -25,9 +27,10 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   List<Source> _sourceOrder = Source.values;
-  SearchSort _sortMode = SearchSort.relevance;
+  SearchSort _sortMode = SearchSort.lineCountDesc;
   PoemDisplaySettings _display = PoemDisplaySettings.defaults;
   MemoryPreset _memoryPreset = MemoryPreset.balanced;
+  double _resultsFontSize = ResultsDisplayPrefs.defaultFontSize;
 
   @override
   void initState() {
@@ -43,6 +46,9 @@ class _SettingsPageState extends State<SettingsPage> {
     });
     MemoryPresetPrefs.load().then((preset) {
       if (mounted) setState(() => _memoryPreset = preset);
+    });
+    ResultsDisplayPrefs.load().then((size) {
+      if (mounted) setState(() => _resultsFontSize = size);
     });
   }
 
@@ -67,6 +73,12 @@ class _SettingsPageState extends State<SettingsPage> {
     AppFonts.currentFamily.value = result.fontFamily;
   }
 
+  Future<void> _setResultsFontSize(double size) async {
+    setState(() => _resultsFontSize = size);
+    await ResultsDisplayPrefs.save(size);
+    AppFonts.currentResultsFontSize.value = size;
+  }
+
   Future<void> _setMemoryPreset(MemoryPreset? preset) async {
     if (preset == null || preset == _memoryPreset) return;
     setState(() => _memoryPreset = preset);
@@ -82,7 +94,10 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('الإعدادات')),
+      appBar: AppBar(
+        title: const Text('الإعدادات'),
+        actions: const [CommonAppBarActions(showSettings: false)],
+      ),
       body: ListView(
         children: [
           const SectionHeader('المصادر'),
@@ -108,7 +123,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
           const Divider(),
-          const SectionHeader('إعدادات العرض'),
+          const SectionHeader("إعدادات عرض القصائد"),
           ListTile(
             leading: const Icon(Icons.format_size),
             title: const Text('حجم الخط والمسافة والخط المستخدم'),
@@ -116,6 +131,20 @@ class _SettingsPageState extends State<SettingsPage> {
               '${_display.fontSize.round()} — ${AppFonts.labelFor(_display.fontFamily)}',
             ),
             onTap: _openDisplaySettings,
+          ),
+          const Divider(),
+          const SectionHeader('حجم خط نتائج البحث'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text('${_resultsFontSize.round()}'),
+          ),
+          Slider(
+            value: _resultsFontSize,
+            min: 10,
+            max: 34,
+            divisions: 24,
+            label: '${_resultsFontSize.round()}',
+            onChanged: _setResultsFontSize,
           ),
           const Divider(),
           const SectionHeader('استهلاك الذاكرة'),

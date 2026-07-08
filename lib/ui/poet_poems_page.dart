@@ -7,11 +7,13 @@ import '../models/source.dart';
 import '../search/search_sort.dart';
 import '../services/search_sort_prefs.dart';
 import '../services/source_filter_prefs.dart';
+import '../widgets/common_app_bar_actions.dart';
 import '../widgets/highlighted_text.dart';
 import '../widgets/search_field.dart';
 import '../widgets/section_header.dart';
 import '../widgets/source_badge.dart';
 import 'poem_detail_page.dart';
+import 'settings_page.dart';
 
 /// Shows one poet's poems, with a search field scoped to that poet's verses.
 class PoetPoemsPage extends StatefulWidget {
@@ -38,7 +40,7 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
   List<LineResult> _matches = const [];
 
   /// How results are ordered. Loaded from persisted prefs (shared with home).
-  SearchSort _sortMode = SearchSort.relevance;
+  SearchSort _sortMode = SearchSort.lineCountDesc;
 
   /// True while a search is in flight, so the results area can show a
   /// loading spinner instead of stale results during the DB query.
@@ -86,6 +88,22 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
       _applySort();
     });
     await SearchSortPrefs.save(mode);
+  }
+
+  /// Opens the consolidated Settings page; on return, reloads the source
+  /// order/sort mode (may have changed there) and re-runs the active search.
+  Future<void> _openSettings() async {
+    await Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const SettingsPage()));
+    if (!mounted) return;
+    final order = await SourceFilterPrefs.load();
+    final sort = await SearchSortPrefs.load();
+    setState(() {
+      _sourceOrder = order;
+      _sortMode = sort;
+      _applySort();
+    });
+    if (_query.isNotEmpty) _runSearch(_query);
   }
 
   @override
@@ -165,6 +183,7 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
                 ),
             ],
           ),
+          CommonAppBarActions(onOpenSettings: _openSettings),
         ],
       ),
       body: CallbackShortcuts(
@@ -173,6 +192,9 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
             _searchFocusNode.requestFocus();
           },
         },
+        // CallbackShortcuts only fires while focus is within its subtree, so
+        // wrap the content in an autofocus node that acts as a fallback focus
+        // holder whenever nothing else (search field, a list item) has focus.
         child: FutureBuilder<List<Poem>>(
           future: _poemsFuture,
           builder: (context, snapshot) {
@@ -180,27 +202,30 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
               return const Center(child: CircularProgressIndicator());
             }
             final poems = snapshot.data!;
-            return Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: SearchField(
-                    autofocus: false,
-                    hintText: 'ابحث في قصائد ${widget.poet}…',
-                    focusNode: _searchFocusNode,
-                    debounce: const Duration(seconds: 1),
-                    onChanged: _onQueryChanged,
-                    onSubmitted: _focusFirstResult,
+            return Focus(
+              autofocus: true,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: SearchField(
+                      autofocus: false,
+                      hintText: 'ابحث في قصائد ${widget.poet}…',
+                      focusNode: _searchFocusNode,
+                      debounce: const Duration(seconds: 1),
+                      onChanged: _onQueryChanged,
+                      onSubmitted: _focusFirstResult,
+                    ),
                   ),
-                ),
-                Expanded(
-                  child: _query.isEmpty
-                      ? _buildPoemList(poems)
-                      : _isSearching
-                          ? const Center(child: CircularProgressIndicator())
-                          : _buildMatchList(),
-                ),
-              ],
+                  Expanded(
+                    child: _query.isEmpty
+                        ? _buildPoemList(poems)
+                        : _isSearching
+                            ? const Center(child: CircularProgressIndicator())
+                            : _buildMatchList(),
+                  ),
+                ],
+              ),
             );
           },
         ),
@@ -266,8 +291,7 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
                   children: [
                     HighlightedText(
                       text: match.title,
-                      start: match.start,
-                      end: match.end,
+                      spans: match.spans,
                       style: Theme.of(context)
                           .textTheme
                           .titleMedium
@@ -298,8 +322,7 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
                 children: [
                   HighlightedText(
                     text: match.original,
-                    start: match.start,
-                    end: match.end,
+                    spans: match.spans,
                     style: Theme.of(context)
                         .textTheme
                         .titleMedium

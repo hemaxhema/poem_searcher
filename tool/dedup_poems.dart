@@ -1,7 +1,7 @@
 // Deduplicates poems: merges poems that are the same text differing only in
 // tashkeel, keeping the best-vocalized copy and recording every deleted poem's
-// provenance in `poem_alias` so no source metadata is lost and the survivor is
-// still found when searching a source whose copy was removed.
+// source provenance in `poem_alias` so the survivor is still found when
+// searching a source whose copy was removed.
 //
 //     dart run tool/dedup_poems.dart [path-to-db=assets/database/DB_Poems.db]
 //
@@ -64,16 +64,11 @@ Future<void> main(List<String> args) async {
     final linesBefore =
         (await db.rawQuery('SELECT COUNT(*) c FROM lines')).first['c'] as int;
 
-    // Source label -> priority for survivor tie-breaks (lower wins).
-    const priority = {
-      'موسوعة أم القرى': 0,
-      'الموسوعة الشعرية': 1,
-      'الديوان': 2,
-      'موسوعة آل مكتوم': 3,
-    };
-    final poemSource = <int, String?>{};
-    for (final r in await db.rawQuery('SELECT id, source_name FROM poem')) {
-      poemSource[r['id'] as int] = r['source_name'] as String?;
+    // poem.source_id (== Source.values index) is already priority-ordered —
+    // lower wins for survivor tie-breaks.
+    final poemSource = <int, int?>{};
+    for (final r in await db.rawQuery('SELECT id, source_id FROM poem')) {
+      poemSource[r['id'] as int] = r['source_id'] as int?;
     }
 
     final range = (await db.rawQuery('SELECT MIN(id) lo, MAX(id) hi FROM poem'))
@@ -114,8 +109,8 @@ Future<void> main(List<String> args) async {
       // survivor is considered before the poems it might supersede.
       group.sort((a, b) {
         if (a.dia != b.dia) return b.dia - a.dia;
-        final pa = priority[poemSource[a.id]] ?? 99;
-        final pb = priority[poemSource[b.id]] ?? 99;
+        final pa = poemSource[a.id] ?? 99;
+        final pb = poemSource[b.id] ?? 99;
         if (pa != pb) return pa - pb;
         return a.id - b.id;
       });
@@ -173,7 +168,7 @@ Future<void> _ensureAliasTable(Database db) async {
     CREATE TABLE poem_alias (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       poem_id    INTEGER NOT NULL REFERENCES poem(id),
-      source_url TEXT, source_name TEXT,
+      source_url TEXT, source_id INTEGER REFERENCES source(id),
       poet TEXT, book TEXT, page TEXT, type TEXT
     )''');
 }
@@ -209,7 +204,8 @@ Future<void> _streamPoems(
 }
 
 /// Applies the deletions: writes a `poem_alias` row (with the deleted poem's
-/// metadata) pointing at its survivor, then deletes the poem and its lines.
+/// source provenance — the only fields ever read back, via `sourcesOfPoem`)
+/// pointing at its survivor, then deletes the poem and its lines.
 Future<void> _applyDeletions(Database db, Map<int, int> deletions) async {
   final entries = deletions.entries.toList();
   for (var i = 0; i < entries.length; i += _applyChunk) {
@@ -217,8 +213,7 @@ Future<void> _applyDeletions(Database db, Map<int, int> deletions) async {
     final ids = slice.map((e) => e.key).toList();
     final placeholders = List.filled(ids.length, '?').join(',');
     final metaRows = await db.rawQuery(
-      'SELECT id, poet, source_url, source_name, book, page, type '
-      'FROM poem WHERE id IN ($placeholders)',
+      'SELECT id, source_url, source_id FROM poem WHERE id IN ($placeholders)',
       ids,
     );
     final meta = {for (final m in metaRows) m['id'] as int: m};
@@ -230,11 +225,7 @@ Future<void> _applyDeletions(Database db, Map<int, int> deletions) async {
         batch.insert('poem_alias', {
           'poem_id': e.value,
           'source_url': m?['source_url'],
-          'source_name': m?['source_name'],
-          'poet': m?['poet'],
-          'book': m?['book'],
-          'page': m?['page'],
-          'type': m?['type'],
+          'source_id': m?['source_id'],
         });
         batch.delete('lines', where: 'poem_id = ?', whereArgs: [e.key]);
         batch.delete('poem', where: 'id = ?', whereArgs: [e.key]);

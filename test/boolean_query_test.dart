@@ -142,13 +142,14 @@ void main() {
   });
 
   group('Highlight span', () {
-    test('span comes from a positive matching term and maps into the text', () {
+    test('every positive term contributes its own span, in parts order', () {
       final expr = parseBoolean('رسول + محمد').expr!;
       const text = 'محمد هو رسول الله';
-      final span = expr.match(text);
-      expect(span, isNotNull);
-      // The first positive term "رسول" should be the highlighted span.
-      expect(text.substring(span!.start, span.end), 'رسول');
+      final spans = expr.match(text);
+      expect(spans, isNotNull);
+      expect(spans, hasLength(2));
+      expect(text.substring(spans![0].start, spans[0].end), 'رسول');
+      expect(text.substring(spans[1].start, spans[1].end), 'محمد');
     });
   });
 
@@ -382,6 +383,16 @@ void main() {
     test('a bracket term still yields a usable stem driver', () {
       final expr = parseBoolean('مسلم[ين,ون]').expr!;
       expect(expr.mandatoryDriver(), 'مسلم');
+    });
+    test('a whole term wrapped in one plain bracket option still narrows', () {
+      // Regression: `[شمالات]` (e.g. from mis-using the char-class button on a
+      // whole word) must not collapse to an empty/unnarrowed probe — that was
+      // silently dropping the SQL LIKE/FTS filter entirely, falling back to an
+      // unbounded table scan capped by `_candidateLimit`.
+      final expr = parseBoolean('[شمالات]').expr!;
+      expect(expr.mandatoryDriver(), 'شمالات');
+      expect(sqlOf('[شمالات]'), "l.plain LIKE ? ESCAPE '\\'");
+      expect(argsOf('[شمالات]'), ['%شمالات%']);
     });
     test('the escape function passed to toSql is actually applied', () {
       final expr = parseBoolean('محمد').expr!;

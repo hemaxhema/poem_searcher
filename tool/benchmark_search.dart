@@ -113,10 +113,10 @@ Future<int> _runCoarseQuery(
       args.add('%${_escapeLike(probe.probe)}%');
     }
   }
-  where.add('(p.source_name = ? OR EXISTS (SELECT 1 FROM poem_alias a '
-      'WHERE a.poem_id = p.id AND a.source_name = ?))');
-  args.add(source.displayName);
-  args.add(source.displayName);
+  where.add('(p.source_id = ? OR EXISTS (SELECT 1 FROM poem_alias a '
+      'WHERE a.poem_id = p.id AND a.source_id = ?))');
+  args.add(source.index);
+  args.add(source.index);
 
   final whereSql = 'WHERE ${where.join(' AND ')}';
   args.add(_candidateLimit);

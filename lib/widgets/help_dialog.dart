@@ -196,20 +196,138 @@ void showHelpDialog(BuildContext context) {
                     '«الشعر» — مفيد لتغطية صيغتي الفعل في طلب واحد.',
               ),
               const Divider(),
+              const _HelpSectionHeader('التنقل في التطبيق'),
+              const _HelpIconRow(
+                icon: Icons.search,
+                title: 'الصفحة الرئيسية',
+                body: 'النتائج تظهر فور الكتابة في مربع البحث، مقسّمة إلى '
+                    '«عناوين» و«أبيات» ومقسّمة صفحات (100 نتيجة لكل صفحة). '
+                    'تظهر شارة ملوّنة على كل نتيجة تبيّن المصدر الذي وردت '
+                    'منه، وإن وُجد رقم دائري بجانبها فهذا يعني وجود نسخ '
+                    'أخرى مطابقة لنفس النص من مصادر أو قصائد أخرى — اضغط '
+                    'عليه لعرضها كلها والانتقال لأيٍّ منها مباشرة.',
+              ),
+              const Divider(),
+              const _HelpIconRow(
+                icon: Icons.people,
+                title: 'الشعراء',
+                body: 'زر «الشعراء» في الأعلى يفتح قائمة كل الشعراء (قابلة '
+                    'للبحث بالاسم مع عدد قصائد كل شاعر)، والنقر على شاعر '
+                    'يفتح كل قصائده مع مربع بحث مخصّص داخل قصائده فقط.',
+              ),
+              const Divider(),
+              const _HelpIconRow(
+                icon: Icons.rule,
+                title: 'البحث المنطقي',
+                body: 'زر «بحث منطقي» يفتح نافذة لبناء تعبير بعوامل و/أو/بدون '
+                    '(انظر القسم أعلاه)، وتظهر شريطًا فوق النتائج بمعنى '
+                    'التعبير الحالي مع أزرار لتعديله أو إلغائه.',
+              ),
+              const Divider(),
+              const _HelpIconRow(
+                icon: Icons.tune,
+                title: 'ترتيب المصادر (وصول سريع)',
+                body: 'زر في أعلى الصفحة الرئيسية يفتح نافذة اختيار/ترتيب '
+                    'المصادر مباشرة، بلا حاجة لفتح صفحة الإعدادات كاملة؛ '
+                    'وهي نفس النافذة المتاحة من الإعدادات.',
+              ),
+              const Divider(),
+              const _HelpIconRow(
+                icon: Icons.menu_book,
+                title: 'صفحة القصيدة',
+                body: 'تعرض القصيدة كاملة، وروابط كل مصدر تتوفر منه (اضغط '
+                    'لفتحه في المتصفح)، وزر نسخ القصيدة كاملة، وتنتقل تلقائيًا '
+                    'إلى البيت الذي جئت منه من نتائج البحث.',
+              ),
+              const Divider(),
+              const _HelpSectionHeader('الإعدادات'),
+              const Padding(
+                padding: EdgeInsets.only(bottom: 4),
+                child: Text(
+                  'من زر الترس (⚙) في أعلى أي صفحة تفتح صفحة الإعدادات '
+                  'الجامعة لكل ما يلي:',
+                ),
+              ),
+              const _HelpIconRow(
+                icon: Icons.tune,
+                title: 'المصادر',
+                body: 'تحديد أي المصادر الأربعة يُبحث فيها وترتيب أولويتها '
+                    '(تُعرض النتائج مجمّعة حسب هذا الترتيب). يجب إبقاء مصدر '
+                    'واحد على الأقل محددًا.',
+              ),
+              const Divider(),
+              const _HelpIconRow(
+                icon: Icons.sort,
+                title: 'ترتيب النتائج',
+                body: '«الأكثر صلة» (الافتراضي، حسب دقة تطابق البحث) أو '
+                    '«الأطول (عدد الأبيات)» — يُطبَّق فورًا على النتائج '
+                    'الحالية بلا إعادة بحث.',
+              ),
+              const Divider(),
+              const _HelpIconRow(
+                icon: Icons.format_size,
+                title: 'إعدادات عرض صفحة القصيدة',
+                body: 'حجم خط الأبيات، والمسافة بين الأبيات، واختيار الخط '
+                    'من قائمة الخطوط المتاحة — تخص صفحة القصيدة نفسها فقط.',
+              ),
+              const Divider(),
+              const _HelpIconRow(
+                icon: Icons.text_fields,
+                title: 'حجم خط نتائج البحث',
+                body: 'منزلق منفصل يتحكم بحجم خط الأبيات والعناوين داخل '
+                    'قوائم نتائج البحث تحديدًا، بمعزل عن حجم خط صفحة '
+                    'القصيدة أعلاه.',
+              ),
+              const Divider(),
+              const _HelpIconRow(
+                icon: Icons.memory,
+                title: 'استهلاك الذاكرة',
+                body: '«منخفض» أو «متوازن» (الافتراضي) — مفاضلة بين سرعة '
+                    'البحث واستهلاك الذاكرة على الأجهزة المحدودة الإمكانيات. '
+                    'يسري تغيير هذا الإعداد بعد إعادة تشغيل التطبيق.',
+              ),
+              const Divider(),
+              const _HelpIconRow(
+                icon: Icons.dark_mode,
+                title: 'الوضع الليلي/النهاري',
+                body: 'زر الشمس/القمر بجانب زر الإعدادات في كل صفحة يبدّل '
+                    'المظهر فورًا ويحفظ الاختيار.',
+              ),
+              const Divider(),
               const _HelpSectionHeader('اختصارات لوحة المفاتيح'),
               Padding(
                 padding: const EdgeInsets.only(top: 4),
-                child: Row(
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const _KeyChip('Ctrl+F'),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        'اضغط Ctrl+F في أي وقت للانتقال إلى مربع البحث '
-                        'والتركيز عليه مباشرة.',
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const _KeyChip('Ctrl+F'),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'اضغط Ctrl+F في أي وقت للانتقال إلى مربع البحث '
+                            'والتركيز عليه مباشرة.',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const _KeyChip('Ctrl+E'),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'اضغط Ctrl+E في الصفحة الرئيسية لفتح نافذة '
+                            'البحث المنطقي مباشرة.',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -409,6 +527,70 @@ class _SymbolBadge extends StatelessWidget {
           fontWeight: FontWeight.bold,
         ),
       ),
+    );
+  }
+}
+
+/// A leading icon badge + title/body, describing one app feature or setting
+/// (the icon-badge counterpart of [_HelpSymbolRow], used where the thing
+/// being explained is a button/page rather than a search-syntax symbol).
+class _HelpIconRow extends StatelessWidget {
+  const _HelpIconRow({
+    required this.icon,
+    required this.title,
+    required this.body,
+  });
+
+  final IconData icon;
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _IconBadge(icon),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  title,
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                Text(body, style: theme.textTheme.bodyMedium),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _IconBadge extends StatelessWidget {
+  const _IconBadge(this.icon);
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      width: 36,
+      height: 36,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primaryContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(icon, size: 20, color: theme.colorScheme.onPrimaryContainer),
     );
   }
 }

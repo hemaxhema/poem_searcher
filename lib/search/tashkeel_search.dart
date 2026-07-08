@@ -360,13 +360,25 @@ class CoarseProbe {
 /// query is split on the wildcard markers (`*`, `?`, `؟`, `_`) and the longest
 /// normalized literal segment becomes the probe (the regex confirms the rest).
 ///
-/// When [charClass] is true, each `[...]` group is likewise a boundary the probe
-/// cannot span, so its span is neutralized to a wildcard before splitting — a
-/// stem like `مسلم` in `مسلم[ين,ون]` still yields an index-usable probe.
+/// When [charClass] is true, a `[...]` group with more than one option (or a
+/// negated/empty option) is a boundary the probe cannot span, so its span is
+/// neutralized to a wildcard before splitting — a stem like `مسلم` in
+/// `مسلم[ين,ون]` still yields an index-usable probe. A group with exactly one
+/// plain option (e.g. `[شمالات]`) is equivalent to that literal text (see
+/// `_emitCharClass`), so it's kept as literal text instead — otherwise a term
+/// that is *entirely* one such group would collapse to an empty probe, losing
+/// all SQL/FTS narrowing.
 CoarseProbe coarseProbe(String query, {bool charClass = false}) {
   var text = _dequote(query).text;
   if (charClass) {
-    text = text.replaceAll(RegExp(r'\[[^\]]*\]'), '*');
+    text = text.replaceAllMapped(RegExp(r'\[([^\]]*)\]'), (m) {
+      final options = m.group(1)!.split(RegExp('[,،]'));
+      if (options.length == 1) {
+        final opt = options.first.trim();
+        if (opt.isNotEmpty && !opt.startsWith('!')) return opt;
+      }
+      return '*';
+    });
   }
   if (!_queryHasWildcard(text)) {
     return CoarseProbe(stripAll(text));

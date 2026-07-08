@@ -33,6 +33,31 @@ void main() {
       expect(coarseProbe('من').canUseIndex, isFalse); // 2 chars
       expect(coarseProbe('قا*وا').canUseIndex, isFalse); // longest segment = 2
     });
+
+    test('charClass: a single-option [...] group is kept as literal text', () {
+      // A term entirely wrapped in one plain bracket option (e.g. from
+      // mis-using the boolean window's char-class button on a whole word)
+      // must still yield an index-usable probe identical to the bare word —
+      // otherwise the SQL coarse filter loses all narrowing and falls back to
+      // an unbounded table scan (see poem_repository._coarseCandidatesBoolean).
+      expect(
+        coarseProbe('[شمالات]', charClass: true).probe,
+        coarseProbe('شمالات').probe,
+      );
+      expect(coarseProbe('[شمالات]', charClass: true).canUseIndex, isTrue);
+      // A prefix/suffix outside the group combines with the literal option.
+      expect(
+        coarseProbe('مسلم[ين]', charClass: true).probe,
+        coarseProbe('مسلمين').probe,
+      );
+    });
+
+    test('charClass: a real multi-option/negated/optional group still '
+        'neutralizes to a wildcard boundary', () {
+      expect(coarseProbe('مسلم[ين,ون]', charClass: true).probe, 'مسلم');
+      expect(coarseProbe('مسلم[ين,ون,]', charClass: true).probe, 'مسلم');
+      expect(coarseProbe('[!و]لد', charClass: true).probe, 'لد');
+    });
   });
 
   // Every (query, text) pair that must MATCH under the rules. Mirrors the cases

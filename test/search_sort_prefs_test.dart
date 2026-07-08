@@ -11,17 +11,17 @@ void main() {
       }
     });
 
-    test('falls back to relevance for unknown or null id', () {
-      expect(SearchSort.byId(null), SearchSort.relevance);
-      expect(SearchSort.byId('nope'), SearchSort.relevance);
+    test('falls back to lineCountDesc for unknown or null id', () {
+      expect(SearchSort.byId(null), SearchSort.lineCountDesc);
+      expect(SearchSort.byId('nope'), SearchSort.lineCountDesc);
     });
   });
 
   group('SearchSortPrefs', () {
     setUp(() => SharedPreferences.setMockInitialValues({}));
 
-    test('defaults to relevance when nothing saved', () async {
-      expect(await SearchSortPrefs.load(), SearchSort.relevance);
+    test('defaults to lineCountDesc when nothing saved', () async {
+      expect(await SearchSortPrefs.load(), SearchSort.lineCountDesc);
     });
 
     test('save then load round-trips a mode', () async {

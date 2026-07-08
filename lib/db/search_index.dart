@@ -13,11 +13,13 @@
 ///   * `lines_fts`        — FTS5 *trigram* index over `lines.plain`.
 ///   * `poem.title_plain` — stripAll(title), the title coarse-filter key.
 ///   * `poem.line_count`  — per-poem line count (only if missing/incomplete).
-///   * indexes on `lines(poem_id)`, `poem(poet)`, `poem(source_name)`.
+///   * `source`           — lookup table `poem.source_id` references.
+///   * indexes on `lines(poem_id)`, `poem(poet_id)`, `poem(source_id)`.
 library;
 
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import '../models/source.dart';
 import '../search/arabic_normalizer.dart';
 
 /// Rows processed per write transaction when normalizing text columns.
@@ -30,6 +32,7 @@ typedef IndexProgress = void Function(String label, int done, int total);
 /// Builds the full search index in [db] (opened read-write). Idempotent: safe
 /// to re-run; already-present pieces are refreshed rather than duplicated.
 Future<void> buildSearchIndex(Database db, {IndexProgress? onProgress}) async {
+  await _ensureSourceTable(db);
   await _ensureAliasTable(db);
   await _addPlainColumn(db);
   await _populatePlain(db, onProgress);
@@ -159,16 +162,18 @@ Future<void> _ensureIndexes(Database db) async {
   await db.execute(
     'CREATE INDEX IF NOT EXISTS idx_lines_poem ON lines(poem_id)',
   );
-  await db.execute(
-    'CREATE INDEX IF NOT EXISTS idx_poem_poet ON poem(poet)',
-  );
-  // Per-source search groups results by `source_name`; this lets each source's
+  if (await _hasColumn(db, 'poem', 'poet_id')) {
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_poem_poet_id ON poem(poet_id)',
+    );
+  }
+  // Per-source search groups results by `source_id`; this lets each source's
   // title-search query restrict to that source's rows instead of scanning all
   // poems (the role the UNIQUE `source_url` index played for the old
   // prefix-range filter).
-  if (await _hasColumn(db, 'poem', 'source_name')) {
+  if (await _hasColumn(db, 'poem', 'source_id')) {
     await db.execute(
-      'CREATE INDEX IF NOT EXISTS idx_poem_source_name ON poem(source_name)',
+      'CREATE INDEX IF NOT EXISTS idx_poem_source_id ON poem(source_id)',
     );
   }
   // Provenance of merged duplicate poems (see tool/dedup_poems.dart): the
@@ -177,12 +182,34 @@ Future<void> _ensureIndexes(Database db) async {
   if (await _hasTable(db, 'poem_alias')) {
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_poem_alias_source '
-      'ON poem_alias(source_name, poem_id)',
+      'ON poem_alias(source_id, poem_id)',
     );
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_poem_alias_poem ON poem_alias(poem_id)',
     );
   }
+}
+
+/// Ensures the `source` lookup table `poem.source_id`/`poem_alias.source_id`
+/// reference exists and is populated, even on a DB that never ran through
+/// tool/normalize_metadata.dart. `source.id` is fixed to `Source.values`'
+/// index (not autoincrement) since the mapping is a fixed Dart enum.
+/// `url_prefix` mirrors `Source.urlPrefix` (`null` for `moktoum`).
+Future<void> _ensureSourceTable(Database db) async {
+  await db.execute(
+      'CREATE TABLE IF NOT EXISTS source (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, url_prefix TEXT)');
+  final batch = db.batch();
+  for (final source in Source.values) {
+    batch.insert(
+        'source',
+        {
+          'id': source.index,
+          'name': source.displayName,
+          'url_prefix': source.urlPrefix,
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore);
+  }
+  await batch.commit(noResult: true);
 }
 
 /// Ensures the provenance table exists (empty is fine) so the app's per-source
@@ -193,7 +220,7 @@ Future<void> _ensureAliasTable(Database db) async {
     CREATE TABLE IF NOT EXISTS poem_alias (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       poem_id    INTEGER NOT NULL REFERENCES poem(id),
-      source_url TEXT, source_name TEXT,
+      source_url TEXT, source_id INTEGER REFERENCES source(id),
       poet TEXT, book TEXT, page TEXT, type TEXT
     )''');
 }

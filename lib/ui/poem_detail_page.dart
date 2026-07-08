@@ -7,8 +7,12 @@ import 'package:url_launcher/url_launcher.dart';
 import '../db/poem_repository.dart';
 import '../models/poem.dart';
 import '../models/poem_line.dart';
+import '../services/app_fonts.dart';
 import '../services/poem_display_prefs.dart';
 import '../util/kashida.dart';
+import '../widgets/common_app_bar_actions.dart';
+import '../widgets/poem_display_settings_dialog.dart';
+import 'settings_page.dart';
 
 /// Shows a full poem: metadata header + every bayt, each rendered as a single
 /// "sadr = ajz" line (matching the original source text) so RTL selection
@@ -191,6 +195,26 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
     return groups;
   }
 
+  /// Opens the consolidated Settings page; on return, reloads the poem
+  /// display settings (font/size/spacing) since they may have changed there.
+  Future<void> _openSettings() async {
+    await Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const SettingsPage()));
+    if (!mounted) return;
+    final display = await PoemDisplayPrefs.load();
+    setState(() => _display = display);
+  }
+
+  /// Opens the poem display settings dialog directly (font/size/spacing),
+  /// without navigating to the full Settings page.
+  Future<void> _openDisplaySettings() async {
+    final result = await showPoemDisplaySettingsDialog(context, _display);
+    if (result == null) return;
+    setState(() => _display = result);
+    await PoemDisplayPrefs.save(result);
+    AppFonts.currentFamily.value = result.fontFamily;
+  }
+
   Future<void> _copyPoem() async {
     final lines = await _linesFuture;
     final text = _groupByLineNumber(lines)
@@ -211,10 +235,16 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
         title: Text(poem?.title ?? 'القصيدة'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.format_size),
+            tooltip: 'إعدادات العرض',
+            onPressed: _openDisplaySettings,
+          ),
+          IconButton(
             icon: const Icon(Icons.copy),
             tooltip: 'نسخ القصيدة',
             onPressed: _copyPoem,
           ),
+          CommonAppBarActions(onOpenSettings: _openSettings),
         ],
       ),
       body: SelectionArea(

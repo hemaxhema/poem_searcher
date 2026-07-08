@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:poem_searcher/db/search_index.dart';
+import 'package:poem_searcher/models/source.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 /// Exercises the full lean-ship / first-run-build round trip end-to-end
@@ -17,9 +18,9 @@ void main() {
     await db.execute('''
       CREATE TABLE poem (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        poet TEXT, source_url TEXT UNIQUE, title TEXT,
+        poet_id INTEGER, source_url TEXT UNIQUE, title TEXT,
         book TEXT, page TEXT, type TEXT,
-        line_count INTEGER, source_name TEXT
+        line_count INTEGER, source_id INTEGER
       )''');
     await db.execute('''
       CREATE TABLE lines (
@@ -28,16 +29,16 @@ void main() {
         line TEXT, line_number INTEGER, line_type TEXT
       )''');
     await db.insert('poem', {
-      'poet': 'شاعر',
-      'source_url': 'https://uqu.edu.sa/1',
+      'poet_id': 1,
+      'source_url': '1',
       'title': 'قَالُوا',
-      'source_name': 'موسوعة أم القرى',
+      'source_id': Source.uqu.index,
     });
     await db.insert('poem', {
-      'poet': 'شاعر آخر',
-      'source_url': 'https://aldiwan.net/1',
+      'poet_id': 2,
+      'source_url': '2',
       'title': 'بيت ثانٍ',
-      'source_name': 'الديوان',
+      'source_id': Source.aldiwan.index,
     });
     await db.insert('lines',
         {'poem_id': 1, 'line': 'قَالُوا لَهُ', 'line_number': 1});
@@ -55,8 +56,8 @@ void main() {
     await db.execute('ALTER TABLE poem DROP COLUMN title_plain');
     for (final idx in const [
       'idx_lines_poem',
-      'idx_poem_poet',
-      'idx_poem_source_name',
+      'idx_poem_poet_id',
+      'idx_poem_source_id',
       'idx_poem_alias_poem',
       'idx_poem_alias_source',
     ]) {
@@ -93,8 +94,8 @@ void main() {
 
     for (final idx in const [
       'idx_lines_poem',
-      'idx_poem_poet',
-      'idx_poem_source_name',
+      'idx_poem_poet_id',
+      'idx_poem_source_id',
       'idx_poem_alias_poem',
       'idx_poem_alias_source',
     ]) {
@@ -107,6 +108,15 @@ void main() {
         "WHERE f.plain LIKE '%قالوا%'");
     expect(hit, hasLength(1));
     expect(hit.first['line'], 'قَالُوا لَهُ');
+
+    // `source` is populated with every Source value, keyed by its enum index.
+    final sourceRows = await db.rawQuery('SELECT id, name, url_prefix FROM source');
+    expect(sourceRows, hasLength(Source.values.length));
+    for (final source in Source.values) {
+      final row = sourceRows.firstWhere((r) => r['id'] == source.index);
+      expect(row['name'], source.displayName);
+      expect(row['url_prefix'], source.urlPrefix);
+    }
   }
 
   test('buildSearchIndex fully builds a fresh lean database', () async {
@@ -157,18 +167,18 @@ void main() {
       CREATE TABLE poem_alias (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         poem_id INTEGER NOT NULL REFERENCES poem(id),
-        source_url TEXT, source_name TEXT,
+        source_url TEXT, source_id INTEGER,
         poet TEXT, book TEXT, page TEXT, type TEXT
       )''');
     await db.insert('poem_alias', {
       'poem_id': 1,
-      'source_url': 'https://poetry.dct.gov.ae/old',
-      'source_name': 'الموسوعة الشعرية',
+      'source_url': 'old',
+      'source_id': Source.dct.index,
     });
     await buildSearchIndex(db);
     final rows = await db.rawQuery('SELECT * FROM poem_alias');
     expect(rows, hasLength(1));
-    expect(rows.first['source_name'], 'الموسوعة الشعرية');
+    expect(rows.first['source_id'], Source.dct.index);
     expect(await hasIndex(db, 'idx_poem_alias_poem'), isTrue);
     await db.close();
   });

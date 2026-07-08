@@ -46,38 +46,36 @@ class _PoemDisplaySettingsDialogState
       title: const Text('إعدادات العرض'),
       content: SizedBox(
         width: 420,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('حجم الخط: ${_fontSize.round()}'),
-            Slider(
-              value: _fontSize,
-              min: 16,
-              max: 32,
-              divisions: 16,
-              label: '${_fontSize.round()}',
-              onChanged: (value) => setState(() => _fontSize = value),
-            ),
-            const SizedBox(height: 12),
-            Text('المسافة بين الأبيات: ${_lineSpacing.round()}'),
-            Slider(
-              value: _lineSpacing,
-              min: 0,
-              max: 20,
-              divisions: 20,
-              label: '${_lineSpacing.round()}',
-              onChanged: (value) => setState(() => _lineSpacing = value),
-            ),
-            const SizedBox(height: 12),
-            const Text('الخط'),
-            SizedBox(
-              height: 220,
-              child: RadioGroup<String>(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('حجم الخط: ${_fontSize.round()}'),
+              Slider(
+                value: _fontSize,
+                min: 16,
+                max: 32,
+                divisions: 16,
+                label: '${_fontSize.round()}',
+                onChanged: (value) => setState(() => _fontSize = value),
+              ),
+              const SizedBox(height: 12),
+              Text('المسافة بين الأبيات: ${_lineSpacing.round()}'),
+              Slider(
+                value: _lineSpacing,
+                min: 0,
+                max: 20,
+                divisions: 20,
+                label: '${_lineSpacing.round()}',
+                onChanged: (value) => setState(() => _lineSpacing = value),
+              ),
+              const SizedBox(height: 12),
+              const Text('الخط'),
+              RadioGroup<String>(
                 groupValue: _fontFamily,
                 onChanged: (value) => setState(() => _fontFamily = value!),
-                child: ListView(
-                  shrinkWrap: true,
+                child: Column(
                   children: [
                     for (final font in AppFonts.available)
                       RadioListTile<String>(
@@ -90,8 +88,8 @@ class _PoemDisplaySettingsDialogState
                   ],
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
       actions: [

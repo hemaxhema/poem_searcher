@@ -12,13 +12,13 @@
 //     dart run tool/build_index.dart assets/database/DB_Poems.db
 //
 // What it does:
-//   1. Adds a `poem.source_name` TEXT column (if missing).
-//   2. Backfills `source_name` for the existing three URL-based sources.
-//   3. Streams every non-empty `poems` row from the source DB, splits its single
-//      `text` blob into per-verse `lines`, and inserts a `poem` row (source_url
-//      NULL, source_name "موسوعة آل مكتوم", title = first hemistich) plus its
-//      lines. `plain`/`title_plain`/`line_count` are left NULL here and filled by
-//      build_index.dart.
+//   Streams every non-empty `poems` row from the source DB, splits its single
+//   `text` blob into per-verse `lines`, and inserts a `poem` row (source_url
+//   NULL, source_id = Source.moktoum.index, poet_id resolved/created in the
+//   `poet` lookup table, title = first hemistich) plus its lines.
+//   `plain`/`title_plain`/`line_count` are left NULL here and filled by
+//   build_index.dart. Requires the `poet` lookup table to already exist (see
+//   tool/normalize_poet.dart).
 //
 // Verse transformation mirrors the existing "شطر = شطر" line shape: the source
 // separates the two hemistiches of a verse with ` ... ` (and, in some poems, `_`);
@@ -27,20 +27,11 @@
 // ignore_for_file: avoid_print
 import 'dart:io';
 
+import 'package:poem_searcher/models/source.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 /// Poems pulled from the source DB per streamed batch.
 const int _batchSize = 5000;
-
-/// Source-name label for the imported poems (the fourth data source).
-const String _moktoumSourceName = 'موسوعة آل مكتوم';
-
-/// The existing three URL-based sources: `source_url` prefix → display name.
-const Map<String, String> _urlSourceNames = {
-  'https://uqu.edu.sa/%': 'موسوعة أم القرى',
-  'https://poetry.dct.gov.ae/%': 'الموسوعة الشعرية',
-  'https://www.aldiwan.net/%': 'الديوان',
-};
 
 final RegExp _whitespaceRe = RegExp(r'\s+');
 
@@ -91,8 +82,6 @@ Future<void> main(List<String> args) async {
   try {
     final sw = Stopwatch()..start();
 
-    await _addSourceNameColumn(target);
-    await _backfillUrlSources(target);
     final imported = await _importPoems(source, target);
 
     print('Imported $imported poems in ${sw.elapsed.inSeconds}s.');
@@ -103,27 +92,14 @@ Future<void> main(List<String> args) async {
   }
 }
 
-Future<bool> _hasColumn(Database db, String table, String column) async {
-  final rows = await db.rawQuery('PRAGMA table_info($table)');
-  return rows.any((r) => r['name'] == column);
-}
-
-Future<void> _addSourceNameColumn(Database db) async {
-  if (!await _hasColumn(db, 'poem', 'source_name')) {
-    print('Adding poem.source_name column …');
-    await db.execute('ALTER TABLE poem ADD COLUMN source_name TEXT');
-  }
-}
-
-Future<void> _backfillUrlSources(Database db) async {
-  print('Backfilling source_name for existing URL-based sources …');
-  for (final entry in _urlSourceNames.entries) {
-    await db.rawUpdate(
-      "UPDATE poem SET source_name = ? "
-      "WHERE source_url LIKE ? ESCAPE '\\' AND source_name IS NULL",
-      [entry.value, entry.key],
-    );
-  }
+/// Resolves [poet] (normalizing '' to null, like the app renders "غير مسجل"
+/// for a missing poet) to its `poet.id`, inserting a new lookup row if this
+/// spelling hasn't been seen before.
+Future<int?> _poetIdFor(Transaction txn, String? poet) async {
+  if (poet == null || poet.isEmpty) return null;
+  final existing = await txn.rawQuery('SELECT id FROM poet WHERE name = ?', [poet]);
+  if (existing.isNotEmpty) return existing.first['id'] as int;
+  return txn.insert('poet', {'name': poet});
 }
 
 /// Streams source poems and inserts them (plus their lines) into [target].
@@ -153,14 +129,13 @@ Future<int> _importPoems(Database source, Database target) async {
 
         final poet = row['poet_name'] as String?;
         final poemId = await txn.insert('poem', {
-          // Normalize '' → null so the app renders "غير مسجل" consistently.
-          'poet': (poet == null || poet.isEmpty) ? null : poet,
+          'poet_id': await _poetIdFor(txn, poet),
           'source_url': null,
           'title': titleFromVerses(verses),
-          'book': null,
+          'book_id': null,
           'page': null,
-          'type': null,
-          'source_name': _moktoumSourceName,
+          'type_id': null,
+          'source_id': Source.moktoum.index,
         });
 
         final batch = txn.batch();

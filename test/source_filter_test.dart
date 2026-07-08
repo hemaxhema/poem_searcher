@@ -8,8 +8,8 @@ void main() {
     for (final source in Source.values) {
       expect(source.displayName, isNotEmpty);
     }
-    // Display names are the stored `poem.source_name` filter key, so they must
-    // be distinct across all sources.
+    // Display names are shown as the source label in the UI, so they must be
+    // distinct across all sources.
     expect(
       Source.values.map((s) => s.displayName).toSet(),
       hasLength(Source.values.length),

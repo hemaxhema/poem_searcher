@@ -9,12 +9,13 @@ import '../search/search_sort.dart';
 import '../services/app_fonts.dart';
 import '../services/search_sort_prefs.dart';
 import '../services/source_filter_prefs.dart';
+import '../widgets/common_app_bar_actions.dart';
 import '../widgets/count_badge.dart';
-import '../widgets/help_dialog.dart';
 import '../widgets/highlighted_text.dart';
 import '../widgets/search_field.dart';
 import '../widgets/section_header.dart';
 import '../widgets/source_badge.dart';
+import '../widgets/source_filter_dialog.dart';
 import 'boolean_search_page.dart';
 import 'poem_detail_page.dart';
 import 'poets_page.dart';
@@ -63,7 +64,7 @@ class _HomePageState extends State<HomePage> {
   List<ResultGroup<TitleResult>> _titleMatches = const [];
 
   /// How results are ordered. Loaded from (and saved to) persisted prefs.
-  SearchSort _sortMode = SearchSort.relevance;
+  SearchSort _sortMode = SearchSort.lineCountDesc;
 
   /// Current 0-based results page. Reset to 0 on every new search.
   int _page = 0;
@@ -129,6 +130,19 @@ class _HomePageState extends State<HomePage> {
   /// order/sort mode (mutated there now, not via an inline dialog/popup here)
   /// and re-runs the active search since a source-order/subset change affects
   /// which rows are fetched, not just their display order.
+  /// Quick-access shortcut to reorder/filter sources directly from the
+  /// AppBar, without navigating into the full Settings page.
+  Future<void> _openSourceFilter() async {
+    final result = await showSourceFilterDialog(context, _sourceOrder);
+    if (result == null) return;
+    setState(() {
+      _sourceOrder = result;
+      _applySort();
+    });
+    await SourceFilterPrefs.save(result);
+    _rerunActiveSearch();
+  }
+
   Future<void> _openSettings() async {
     await Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => const SettingsPage()));
@@ -306,15 +320,11 @@ class _HomePageState extends State<HomePage> {
             onPressed: _openBooleanSearch,
           ),
           IconButton(
-            icon: const Icon(Icons.settings),
-            tooltip: 'الإعدادات',
-            onPressed: _openSettings,
+            icon: const Icon(Icons.sort),
+            tooltip: 'ترتيب المصادر',
+            onPressed: _openSourceFilter,
           ),
-          IconButton(
-            icon: const Icon(Icons.help_outline),
-            tooltip: 'مساعدة',
-            onPressed: () => showHelpDialog(context),
-          ),
+          CommonAppBarActions(onOpenSettings: _openSettings),
         ],
       ),
       body: CallbackShortcuts(
@@ -322,40 +332,49 @@ class _HomePageState extends State<HomePage> {
           const SingleActivator(LogicalKeyboardKey.keyF, control: true): () {
             _searchFocusNode.requestFocus();
           },
+          const SingleActivator(LogicalKeyboardKey.keyE, control: true): () {
+            _openBooleanSearch();
+          },
         },
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-              child: SearchField(
-                key: ValueKey(_searchFieldEpoch),
-                focusNode: _searchFocusNode,
-                debounce: const Duration(seconds: 1),
-                onChanged: _onQueryChanged,
-                onSubmitted: _focusFirstResult,
+        // CallbackShortcuts only fires while focus is within its subtree, so
+        // wrap the content in an autofocus node that acts as a fallback focus
+        // holder whenever nothing else (search field, a result tile) has focus.
+        child: Focus(
+          autofocus: true,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                child: SearchField(
+                  key: ValueKey(_searchFieldEpoch),
+                  focusNode: _searchFocusNode,
+                  debounce: const Duration(seconds: 1),
+                  onChanged: _onQueryChanged,
+                  onSubmitted: _focusFirstResult,
+                ),
               ),
-            ),
-            if (_boolDescription != null)
-              _BooleanSearchBanner(
-                description: _boolDescription!,
-                onEdit: _openBooleanSearch,
-                onClear: _clearBooleanSearch,
-              ),
-            Expanded(child: _buildResults()),
-            if (!_isSearching &&
-                _hasActiveSearch &&
-                (_titleMatches.isNotEmpty || _lineMatches.isNotEmpty))
-              _ResultsPager(
-                page: _pageWindow.page,
-                totalPages: _pageWindow.totalPages,
-                onPrev: _pageWindow.page > 0
-                    ? () => _goToPage(_pageWindow.page - 1)
-                    : null,
-                onNext: _pageWindow.page < _pageWindow.totalPages - 1
-                    ? () => _goToPage(_pageWindow.page + 1)
-                    : null,
-              ),
-          ],
+              if (_boolDescription != null)
+                _BooleanSearchBanner(
+                  description: _boolDescription!,
+                  onEdit: _openBooleanSearch,
+                  onClear: _clearBooleanSearch,
+                ),
+              Expanded(child: _buildResults()),
+              if (!_isSearching &&
+                  _hasActiveSearch &&
+                  (_titleMatches.isNotEmpty || _lineMatches.isNotEmpty))
+                _ResultsPager(
+                  page: _pageWindow.page,
+                  totalPages: _pageWindow.totalPages,
+                  onPrev: _pageWindow.page > 0
+                      ? () => _goToPage(_pageWindow.page - 1)
+                      : null,
+                  onNext: _pageWindow.page < _pageWindow.totalPages - 1
+                      ? () => _goToPage(_pageWindow.page + 1)
+                      : null,
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -406,7 +425,7 @@ class _HomePageState extends State<HomePage> {
             match: group.shown,
             duplicates: group.duplicates,
             focusNode: i == 0 ? _firstResultFocusNode : null,
-            onTap: () => _openPoem(group.shown.poemId),
+            onOpen: _openPoem,
           );
         }
         if (index == lineHeaderIndex) {
@@ -418,7 +437,7 @@ class _HomePageState extends State<HomePage> {
           match: group.shown,
           duplicates: group.duplicates,
           focusNode: (!hasTitles && i == 0) ? _firstResultFocusNode : null,
-          onTap: () => _openPoem(group.shown.poemId, lineId: group.shown.lineId),
+          onOpen: _openPoem,
         );
       },
     );
@@ -428,16 +447,19 @@ class _HomePageState extends State<HomePage> {
 class _LineResultTile extends StatelessWidget {
   const _LineResultTile({
     required this.match,
-    required this.onTap,
+    required this.onOpen,
     this.duplicates = const [],
     this.focusNode,
   });
 
   final LineResult match;
-  final VoidCallback onTap;
 
-  /// Copies of this same verse matched under other (lower-priority) sources,
-  /// hidden behind a [CountBadge] that opens [showDuplicateSourcesDialog].
+  /// Opens the poem this tile (or, from the duplicates dialog, one of its
+  /// duplicates) refers to.
+  final void Function(int poemId, {int? lineId}) onOpen;
+
+  /// Other confirmed matches with the same verse text, hidden behind a
+  /// [CountBadge] that opens [_showLineDuplicatesDialog].
   final List<LineResult> duplicates;
   final FocusNode? focusNode;
 
@@ -452,7 +474,7 @@ class _LineResultTile extends StatelessWidget {
     return Card(
       child: InkWell(
         focusNode: focusNode,
-        onTap: onTap,
+        onTap: () => onOpen(match.poemId, lineId: match.lineId),
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.all(8),
@@ -461,13 +483,16 @@ class _LineResultTile extends StatelessWidget {
             children: [
               ValueListenableBuilder<String>(
                 valueListenable: AppFonts.currentFamily,
-                builder: (context, family, _) => HighlightedText(
-                  text: match.original,
-                  start: match.start,
-                  end: match.end,
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    height: 1.8,
-                    fontFamily: family,
+                builder: (context, family, _) => ValueListenableBuilder<double>(
+                  valueListenable: AppFonts.currentResultsFontSize,
+                  builder: (context, fontSize, _) => HighlightedText(
+                    text: match.original,
+                    spans: match.spans,
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      height: 1.8,
+                      fontFamily: family,
+                      fontSize: fontSize,
+                    ),
                   ),
                 ),
               ),
@@ -479,10 +504,11 @@ class _LineResultTile extends StatelessWidget {
                     const SizedBox(width: 4),
                     CountBadge(
                       count: duplicates.length,
-                      tooltip: 'مصادر أخرى لهذا البيت',
-                      onTap: () => showDuplicateSourcesDialog(
+                      tooltip: 'نتائج أخرى لهذا البيت',
+                      onTap: () => _showLineDuplicatesDialog(
                         context,
-                        [match.source, ...duplicates.map((d) => d.source)],
+                        [match, ...duplicates],
+                        onOpen,
                       ),
                     ),
                   ],
@@ -513,16 +539,19 @@ class _LineResultTile extends StatelessWidget {
 class _TitleResultTile extends StatelessWidget {
   const _TitleResultTile({
     required this.match,
-    required this.onTap,
+    required this.onOpen,
     this.duplicates = const [],
     this.focusNode,
   });
 
   final TitleResult match;
-  final VoidCallback onTap;
 
-  /// Copies of this same poem matched under other (lower-priority) sources,
-  /// hidden behind a [CountBadge] that opens [showDuplicateSourcesDialog].
+  /// Opens the poem this tile (or, from the duplicates dialog, one of its
+  /// duplicates) refers to.
+  final void Function(int poemId, {int? lineId}) onOpen;
+
+  /// Other confirmed matches with the same title text, hidden behind a
+  /// [CountBadge] that opens [_showTitleDuplicatesDialog].
   final List<TitleResult> duplicates;
   final FocusNode? focusNode;
 
@@ -533,7 +562,7 @@ class _TitleResultTile extends StatelessWidget {
     return Card(
       child: InkWell(
         focusNode: focusNode,
-        onTap: onTap,
+        onTap: () => onOpen(match.poemId),
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.all(8),
@@ -542,13 +571,16 @@ class _TitleResultTile extends StatelessWidget {
             children: [
               ValueListenableBuilder<String>(
                 valueListenable: AppFonts.currentFamily,
-                builder: (context, family, _) => HighlightedText(
-                  text: match.title,
-                  start: match.start,
-                  end: match.end,
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    height: 1.8,
-                    fontFamily: family,
+                builder: (context, family, _) => ValueListenableBuilder<double>(
+                  valueListenable: AppFonts.currentResultsFontSize,
+                  builder: (context, fontSize, _) => HighlightedText(
+                    text: match.title,
+                    spans: match.spans,
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      height: 1.8,
+                      fontFamily: family,
+                      fontSize: fontSize,
+                    ),
                   ),
                 ),
               ),
@@ -560,10 +592,11 @@ class _TitleResultTile extends StatelessWidget {
                     const SizedBox(width: 4),
                     CountBadge(
                       count: duplicates.length,
-                      tooltip: 'مصادر أخرى لهذا العنوان',
-                      onTap: () => showDuplicateSourcesDialog(
+                      tooltip: 'نتائج أخرى لهذا العنوان',
+                      onTap: () => _showTitleDuplicatesDialog(
                         context,
-                        [match.source, ...duplicates.map((d) => d.source)],
+                        [match, ...duplicates],
+                        onOpen,
                       ),
                     ),
                   ],
@@ -589,6 +622,90 @@ class _TitleResultTile extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Shows every confirmed title match collapsed into one tile — the shown one
+/// plus its hidden duplicates — as full result tiles (same look as the main
+/// list), so picking one still opens its poem.
+void _showTitleDuplicatesDialog(
+  BuildContext context,
+  List<TitleResult> results,
+  void Function(int poemId, {int? lineId}) onOpen,
+) {
+  showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('نتائج أخرى لهذا العنوان'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final r in results)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _TitleResultTile(
+                    match: r,
+                    onOpen: (poemId, {lineId}) {
+                      Navigator.of(dialogContext).pop();
+                      onOpen(poemId);
+                    },
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(),
+          child: const Text('إغلاق'),
+        ),
+      ],
+    ),
+  );
+}
+
+/// [_showTitleDuplicatesDialog]'s counterpart for verse-line results.
+void _showLineDuplicatesDialog(
+  BuildContext context,
+  List<LineResult> results,
+  void Function(int poemId, {int? lineId}) onOpen,
+) {
+  showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('نتائج أخرى لهذا البيت'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final r in results)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _LineResultTile(
+                    match: r,
+                    onOpen: (poemId, {lineId}) {
+                      Navigator.of(dialogContext).pop();
+                      onOpen(poemId, lineId: lineId);
+                    },
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(),
+          child: const Text('إغلاق'),
+        ),
+      ],
+    ),
+  );
 }
 
 /// Small pill showing how many lines the poem has.

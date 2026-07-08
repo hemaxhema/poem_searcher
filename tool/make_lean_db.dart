@@ -54,8 +54,8 @@ Future<void> main(List<String> args) async {
     print('Dropping secondary indexes …');
     for (final idx in const [
       'idx_lines_poem',
-      'idx_poem_poet',
-      'idx_poem_source_name',
+      'idx_poem_poet_id',
+      'idx_poem_source_id',
       'idx_poem_alias_poem',
       'idx_poem_alias_source',
     ]) {

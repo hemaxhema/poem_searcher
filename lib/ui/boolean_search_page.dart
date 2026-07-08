@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../search/boolean_query.dart';
+import '../widgets/common_app_bar_actions.dart';
 import '../widgets/haraka_aware_backspace.dart';
-import '../widgets/help_dialog.dart';
 import '../widgets/visual_caret_arrow_keys.dart';
 
 /// What the boolean search window hands back to the caller when the user
@@ -94,13 +94,7 @@ class _BooleanSearchPageState extends State<BooleanSearchPage> {
       appBar: AppBar(
         toolbarHeight: 48,
         title: Text('بحث منطقي', style: theme.textTheme.titleMedium),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.help_outline),
-            tooltip: 'مساعدة',
-            onPressed: () => showHelpDialog(context),
-          ),
-        ],
+        actions: const [CommonAppBarActions()],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
@@ -154,7 +148,7 @@ class _BooleanSearchPageState extends State<BooleanSearchPage> {
                 _OpButton(symbol: '-', label: 'بدون', onTap: () => _insert(' - ')),
                 _OpButton(symbol: '( )', label: 'تجميع', onTap: () => _insert('()', caretBack: 1)),
                 _OpButton(symbol: '[ ]', label: 'بدائل الحرف', onTap: () => _insert('[]', caretBack: 1)),
-                _OpButton(symbol: ', ،', label: 'فاصلة', onTap: () => _insert('،')),
+                _OpButton(symbol: '،', label: 'فاصلة', onTap: () => _insert('،')),
                 _OpButton(symbol: '*', label: 'أي حروف', onTap: () => _insert('*')),
                 _OpButton(symbol: '؟', label: 'حرف واحد', onTap: () => _insert('؟')),
                 _OpButton(symbol: '_', label: 'أي كلمات', onTap: () => _insert('_')),
