@@ -6,6 +6,7 @@ import '../models/source.dart';
 import '../platform/database_bootstrap.dart';
 import 'database_preparer.dart';
 import 'memory_preset.dart';
+import 'poem_search_api.dart';
 import '../search/boolean_query.dart';
 import '../search/tashkeel_search.dart';
 import 'search_index.dart';
@@ -104,7 +105,7 @@ class TitleResult {
 /// `LIKE` over a pre-normalized `plain` column, built by `tool/build_index.dart`)
 /// and then confirms each candidate with the precise regex in Dart. Only poet
 /// names — few enough to hold in memory — keep the old fully in-memory search.
-class PoemRepository {
+class PoemRepository implements PoemSearchApi {
   PoemRepository._(this._db);
 
   final Database _db;
@@ -283,6 +284,7 @@ class PoemRepository {
   /// [matchTightness] (tighter/more-exact matches first) before the next
   /// source is considered. Poem metadata is joined in so results render with
   /// no extra lookups.
+  @override
   Future<List<LineResult>> searchLines(
     String query, {
     String? poet,
@@ -305,6 +307,7 @@ class PoemRepository {
   /// [searchLines], but the candidate filter and per-row confirmation come from
   /// a parsed [BoolExpr] (AND / OR / NOT with grouping). Returns nothing when
   /// the expression has no positive term to anchor the results.
+  @override
   Future<List<LineResult>> searchLinesBoolean(
     BoolExpr expr, {
     String? poet,
@@ -367,6 +370,7 @@ class PoemRepository {
   /// When [poet] is given, results are restricted to that poet's poems (used
   /// for poet-scoped search). Same source ordering/priority-grouping and
   /// within-source relevance ranking as [searchLines].
+  @override
   Future<List<TitleResult>> searchTitles(
     String query, {
     String? poet,
@@ -387,6 +391,7 @@ class PoemRepository {
 
   /// Boolean title search — the [searchTitles] counterpart of
   /// [searchLinesBoolean].
+  @override
   Future<List<TitleResult>> searchTitlesBoolean(
     BoolExpr expr, {
     String? poet,

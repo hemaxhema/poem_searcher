@@ -1,15 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../controllers/search_controller.dart';
 import '../db/poem_repository.dart';
-import '../models/source.dart';
-import '../search/boolean_query.dart';
-import '../search/result_dedup.dart';
-import '../search/search_sort.dart';
 import '../services/app_fonts.dart';
-import '../services/search_sort_prefs.dart';
-import '../services/search_titles_prefs.dart';
-import '../services/source_filter_prefs.dart';
 import '../widgets/common_app_bar_actions.dart';
 import '../widgets/count_badge.dart';
 import '../widgets/global_control_shortcuts.dart';
@@ -21,7 +15,6 @@ import '../widgets/source_filter_dialog.dart';
 import 'boolean_search_page.dart';
 import 'poem_detail_page.dart';
 import 'poets_page.dart';
-import '../search/results_pagination.dart';
 import 'settings_page.dart';
 
 /// Main screen: a search bar with live tashkeel-aware results underneath.
@@ -38,55 +31,16 @@ class _HomePageState extends State<HomePage> {
   /// Number of result tiles shown per page.
   static const int _pageSize = 100;
 
-  String _query = '';
-
-  /// The active boolean-search expression, or `null` when searching via the
-  /// plain box. When set, [_runSearch] uses the boolean repository methods and a
-  /// banner explaining it (in Arabic) is shown above the results.
-  BoolExpr? _boolExpr;
-  String? _boolDescription;
-
-  /// The raw boolean expression text, kept so the window reopens pre-filled.
-  String _boolRaw = '';
+  /// All search state and orchestration; this widget only renders it and
+  /// forwards user intent (see [PoemSearchController]).
+  late final PoemSearchController _search = PoemSearchController(
+    api: widget.repo,
+    pageSize: _pageSize,
+  );
 
   /// Bumped to force the plain [SearchField] to reset its text (e.g. when a
   /// boolean search takes over) via a changing [ValueKey].
   int _searchFieldEpoch = 0;
-
-  /// Repository output, in relevance order — the source of truth from the last
-  /// search. Display lists are derived from these by [_applySort].
-  List<LineResult> _rawLineMatches = const [];
-  List<TitleResult> _rawTitleMatches = const [];
-
-  /// Display lists (sorted per [_sortMode], then grouped per [_applySort]):
-  /// one entry per distinct poem/line, each carrying the other matches
-  /// (other sources, or other un-merged poem rows with the same wording)
-  /// collapsed into it. Read by the list/pager.
-  List<ResultGroup<LineResult>> _lineMatches = const [];
-  List<ResultGroup<TitleResult>> _titleMatches = const [];
-
-  /// How results are ordered. Loaded from (and saved to) persisted prefs.
-  SearchSort _sortMode = SearchSort.lineCountDesc;
-
-  /// Whether searches also run over poem titles. When false, the titles
-  /// ("عناوين") section is neither searched nor shown. Loaded from persisted
-  /// prefs and refreshed when returning from the settings page.
-  bool _searchInTitles = SearchTitlesPrefs.defaultEnabled;
-
-  /// Current 0-based results page. Reset to 0 on every new search.
-  int _page = 0;
-
-  /// True while a search is in flight, so the results area can show a
-  /// loading spinner instead of stale results during the DB query.
-  bool _isSearching = false;
-
-  /// Monotonic token so a slow search that resolves after a newer one has
-  /// started is discarded instead of overwriting fresher results.
-  int _searchToken = 0;
-
-  /// Selected sources, in search priority order. Loaded from (and saved to)
-  /// persisted prefs so the choice survives app restarts.
-  List<Source> _sourceOrder = Source.values;
 
   final FocusNode _searchFocusNode = FocusNode();
   final FocusNode _firstResultFocusNode = FocusNode();
@@ -108,90 +62,35 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _shortcuts.attach();
-    SourceFilterPrefs.load().then((order) {
-      if (mounted) setState(() => _sourceOrder = order);
-    });
-    SearchSortPrefs.load().then((sort) {
-      if (mounted) {
-        setState(() {
-          _sortMode = sort;
-          _applySort();
-        });
-      }
-    });
-    SearchTitlesPrefs.load().then((enabled) {
-      if (mounted) setState(() => _searchInTitles = enabled);
-    });
-  }
-
-  /// Derives the display lists from the raw (relevance-ordered) results per the
-  /// current [_sortMode] and source order, then collapses same-wording results
-  /// (matched under several merged sources, or catalogued as separate un-merged
-  /// poem rows) down to a single tile per distinct poem/line — the first-priority
-  /// source; the rest surface via a badge (see [_TitleResultTile]/
-  /// [_LineResultTile]). Cheap in-memory work — no DB hit.
-  void _applySort() {
-    final sortedTitles =
-        sortTitleResults(_rawTitleMatches, _sortMode, _sourceOrder);
-    final sortedLines =
-        sortLineResults(_rawLineMatches, _sortMode, _sourceOrder);
-    _titleMatches = groupTitleResults(sortedTitles);
-    _lineMatches = groupLineResults(sortedLines);
+    _search.loadPrefs();
   }
 
   @override
   void dispose() {
     _shortcuts.dispose();
+    _search.dispose();
     _searchFocusNode.dispose();
     _firstResultFocusNode.dispose();
     _resultsController.dispose();
     super.dispose();
   }
 
-  /// Opens the consolidated Settings page; on return, reloads the source
-  /// order/sort mode (mutated there now, not via an inline dialog/popup here)
-  /// and re-runs the active search since a source-order/subset change affects
-  /// which rows are fetched, not just their display order.
   /// Quick-access shortcut to reorder/filter sources directly from the
   /// AppBar, without navigating into the full Settings page.
   Future<void> _openSourceFilter() async {
-    final result = await showSourceFilterDialog(context, _sourceOrder);
+    final result = await showSourceFilterDialog(context, _search.sourceOrder);
     if (result == null) return;
-    setState(() {
-      _sourceOrder = result;
-      _applySort();
-    });
-    await SourceFilterPrefs.save(result);
-    _rerunActiveSearch();
+    await _search.setSourceOrder(result);
   }
 
+  /// Opens the consolidated Settings page; on return, reloads the source
+  /// order/sort mode/titles toggle (mutated there now, not via an inline
+  /// dialog/popup here) and re-runs the active search.
   Future<void> _openSettings() async {
     await Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => const SettingsPage()));
     if (!mounted) return;
-    final order = await SourceFilterPrefs.load();
-    final sort = await SearchSortPrefs.load();
-    final searchInTitles = await SearchTitlesPrefs.load();
-    setState(() {
-      _sourceOrder = order;
-      _sortMode = sort;
-      _searchInTitles = searchInTitles;
-      _applySort();
-    });
-    _rerunActiveSearch();
-  }
-
-  /// True when a search (plain box or boolean) is currently driving the results
-  /// area — used to decide between the empty hint and the results list/pager.
-  bool get _hasActiveSearch => _query.isNotEmpty || _boolExpr != null;
-
-  /// Re-runs whichever search is active (after a source-filter change).
-  void _rerunActiveSearch() {
-    if (_boolExpr != null) {
-      _runBooleanSearch(_boolExpr!);
-    } else if (_query.isNotEmpty) {
-      _runSearch(_query);
-    }
+    await _search.reloadPrefsAndRerun();
   }
 
   /// Opens the boolean-search window; on confirm, switches to boolean mode
@@ -199,120 +98,24 @@ class _HomePageState extends State<HomePage> {
   Future<void> _openBooleanSearch() async {
     final result = await Navigator.of(context).push<BooleanSearchResult>(
       MaterialPageRoute(
-        builder: (_) => BooleanSearchPage(initialExpression: _boolRaw),
+        builder: (_) => BooleanSearchPage(initialExpression: _search.boolRaw),
       ),
     );
     if (result == null || !mounted) return;
-    setState(() {
-      _boolExpr = result.expr;
-      _boolDescription = result.expr.describeArabic();
-      _boolRaw = result.raw;
-      _query = '';
-      _searchFieldEpoch++; // reset the plain box text
-      _isSearching = true;
-      _page = 0;
-    });
-    _runBooleanSearch(result.expr);
-  }
-
-  /// Clears the active boolean search and returns to the empty/plain state.
-  void _clearBooleanSearch() {
-    setState(() {
-      _boolExpr = null;
-      _boolDescription = null;
-      _boolRaw = '';
-      _titleMatches = const [];
-      _lineMatches = const [];
-      _rawTitleMatches = const [];
-      _rawLineMatches = const [];
-      _isSearching = false;
-      _page = 0;
-    });
+    setState(() => _searchFieldEpoch++); // reset the plain box text
+    _search.runBooleanSearch(result.raw, result.expr);
   }
 
   void _focusFirstResult() {
-    if (_titleMatches.isNotEmpty || _lineMatches.isNotEmpty) {
+    if (_search.titleGroups.isNotEmpty || _search.lineGroups.isNotEmpty) {
       _firstResultFocusNode.requestFocus();
     }
   }
 
-  // SearchField already debounces keystrokes (see its `debounce` parameter
-  // below), so this only needs to dispatch the (already-settled) query.
-  void _onQueryChanged(String query) {
-    final trimmed = query.trim();
-    _query = trimmed;
-    // Typing in the plain box takes over from any active boolean search.
-    _boolExpr = null;
-    _boolDescription = null;
-    _boolRaw = '';
-    if (trimmed.isEmpty) {
-      setState(() {
-        _titleMatches = const [];
-        _lineMatches = const [];
-        _isSearching = false;
-        _page = 0;
-      });
-      return;
-    }
-    setState(() => _isSearching = true);
-    _runSearch(trimmed);
-  }
-
-  Future<void> _runSearch(String query) async {
-    final token = ++_searchToken;
-    final titleFuture = _searchInTitles
-        ? widget.repo.searchTitles(query, sourceOrder: _sourceOrder)
-        : Future<List<TitleResult>>.value(const []);
-    final results = await Future.wait([
-      titleFuture,
-      widget.repo.searchLines(query, sourceOrder: _sourceOrder),
-    ]);
-    // Drop stale results (a newer query started, or the box changed/emptied).
-    if (!mounted || token != _searchToken || query != _query) return;
-    setState(() {
-      _rawTitleMatches = results[0] as List<TitleResult>;
-      _rawLineMatches = results[1] as List<LineResult>;
-      _applySort();
-      _isSearching = false;
-      _page = 0;
-    });
-  }
-
-  /// Boolean-mode counterpart of [_runSearch]: runs the parsed [expr] against
-  /// the boolean repository methods, with the same stale-result guard.
-  Future<void> _runBooleanSearch(BoolExpr expr) async {
-    final token = ++_searchToken;
-    final titleFuture = _searchInTitles
-        ? widget.repo.searchTitlesBoolean(expr, sourceOrder: _sourceOrder)
-        : Future<List<TitleResult>>.value(const []);
-    final results = await Future.wait([
-      titleFuture,
-      widget.repo.searchLinesBoolean(expr, sourceOrder: _sourceOrder),
-    ]);
-    // Drop stale results (a newer search started, or boolean mode was cleared).
-    if (!mounted || token != _searchToken || !identical(expr, _boolExpr)) return;
-    setState(() {
-      _rawTitleMatches = results[0] as List<TitleResult>;
-      _rawLineMatches = results[1] as List<LineResult>;
-      _applySort();
-      _isSearching = false;
-      _page = 0;
-    });
-  }
-
-  /// Page geometry for the current results and selected page. Cheap to compute,
-  /// so both the list and the pager derive from it fresh each build.
-  PageWindow get _pageWindow => PageWindow.compute(
-        titleCount: _titleMatches.length,
-        lineCount: _lineMatches.length,
-        page: _page,
-        pageSize: _pageSize,
-      );
-
   /// Jumps to [page] and scrolls the results list back to the top so each page
   /// reads from the first result down.
   void _goToPage(int page) {
-    setState(() => _page = page);
+    _search.goToPage(page);
     if (_resultsController.hasClients) _resultsController.jumpTo(0);
   }
 
@@ -357,45 +160,52 @@ class _HomePageState extends State<HomePage> {
           CommonAppBarActions(onOpenSettings: _openSettings),
         ],
       ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-            child: SearchField(
-              key: ValueKey(_searchFieldEpoch),
-              focusNode: _searchFocusNode,
-              debounce: const Duration(seconds: 1),
-              onChanged: _onQueryChanged,
-              onSubmitted: _focusFirstResult,
-            ),
-          ),
-          if (_boolDescription != null)
-            _BooleanSearchBanner(
-              description: _boolDescription!,
-              onEdit: _openBooleanSearch,
-              onClear: _clearBooleanSearch,
-            ),
-          Expanded(child: _buildResults()),
-          if (!_isSearching &&
-              _hasActiveSearch &&
-              (_titleMatches.isNotEmpty || _lineMatches.isNotEmpty))
-            _ResultsPager(
-              page: _pageWindow.page,
-              totalPages: _pageWindow.totalPages,
-              onPrev: _pageWindow.page > 0
-                  ? () => _goToPage(_pageWindow.page - 1)
-                  : null,
-              onNext: _pageWindow.page < _pageWindow.totalPages - 1
-                  ? () => _goToPage(_pageWindow.page + 1)
-                  : null,
-            ),
-        ],
+      body: ListenableBuilder(
+        listenable: _search,
+        builder: (context, _) {
+          final window = _search.pageWindow;
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                child: SearchField(
+                  key: ValueKey(_searchFieldEpoch),
+                  focusNode: _searchFocusNode,
+                  debounce: const Duration(seconds: 1),
+                  onChanged: _search.onQueryChanged,
+                  onSubmitted: _focusFirstResult,
+                ),
+              ),
+              if (_search.boolDescription != null)
+                _BooleanSearchBanner(
+                  description: _search.boolDescription!,
+                  onEdit: _openBooleanSearch,
+                  onClear: _search.clearBooleanSearch,
+                ),
+              Expanded(child: _buildResults()),
+              if (!_search.isSearching &&
+                  _search.hasActiveSearch &&
+                  (_search.titleGroups.isNotEmpty ||
+                      _search.lineGroups.isNotEmpty))
+                _ResultsPager(
+                  page: window.page,
+                  totalPages: window.totalPages,
+                  onPrev: window.page > 0
+                      ? () => _goToPage(window.page - 1)
+                      : null,
+                  onNext: window.page < window.totalPages - 1
+                      ? () => _goToPage(window.page + 1)
+                      : null,
+                ),
+            ],
+          );
+        },
       ),
     );
   }
 
   Widget _buildResults() {
-    if (!_hasActiveSearch) {
+    if (!_search.hasActiveSearch) {
       return const _EmptyHint(
         icon: Icons.search,
         message: 'اكتب كلمة للبحث في الأبيات.\n'
@@ -403,10 +213,12 @@ class _HomePageState extends State<HomePage> {
             'ومع التشكيل يلتزم به.',
       );
     }
-    if (_isSearching) {
+    if (_search.isSearching) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_titleMatches.isEmpty && _lineMatches.isEmpty) {
+    final titleGroups = _search.titleGroups;
+    final lineGroups = _search.lineGroups;
+    if (titleGroups.isEmpty && lineGroups.isEmpty) {
       return const _EmptyHint(
         icon: Icons.search_off,
         message: 'لا توجد نتائج.',
@@ -417,7 +229,7 @@ class _HomePageState extends State<HomePage> {
     // headers keep showing the full totals. Flattened item model so the list
     // builds lazily: [titles header, title tiles…], then [lines header, line
     // tiles…], with the first tile on the page taking keyboard focus.
-    final window = _pageWindow;
+    final window = _search.pageWindow;
     final hasTitles = window.titleCountOnPage > 0;
     final titleBlock = hasTitles ? 1 + window.titleCountOnPage : 0;
     final lineHeaderIndex = titleBlock;
@@ -431,10 +243,10 @@ class _HomePageState extends State<HomePage> {
       itemBuilder: (context, index) {
         if (hasTitles && index < titleBlock) {
           if (index == 0) {
-            return SectionHeader('عناوين (${_titleMatches.length})');
+            return SectionHeader('عناوين (${titleGroups.length})');
           }
           final i = index - 1;
-          final group = _titleMatches[window.titleStart + i];
+          final group = titleGroups[window.titleStart + i];
           return _TitleResultTile(
             match: group.shown,
             duplicates: group.duplicates,
@@ -443,10 +255,10 @@ class _HomePageState extends State<HomePage> {
           );
         }
         if (index == lineHeaderIndex) {
-          return SectionHeader('أبيات (${_lineMatches.length})');
+          return SectionHeader('أبيات (${lineGroups.length})');
         }
         final i = index - lineHeaderIndex - 1;
-        final group = _lineMatches[window.lineStart + i];
+        final group = lineGroups[window.lineStart + i];
         return _LineResultTile(
           match: group.shown,
           duplicates: group.duplicates,
