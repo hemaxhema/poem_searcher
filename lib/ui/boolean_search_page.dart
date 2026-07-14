@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../search/boolean_query.dart';
+import '../util/text_editing.dart';
 import '../widgets/common_app_bar_actions.dart';
 import '../widgets/global_control_shortcuts.dart';
 import '../widgets/haraka_aware_backspace.dart';
@@ -80,17 +81,9 @@ class _BooleanSearchPageState extends State<BooleanSearchPage> {
   /// [caretBack] moves the caret left from the end of the inserted text (e.g. 1
   /// to land between an inserted `[]` pair).
   void _insert(String token, {int caretBack = 0}) {
-    final value = _controller.value;
-    final sel = value.selection;
-    final start = sel.start < 0 ? value.text.length : sel.start;
-    final end = sel.end < 0 ? value.text.length : sel.end;
-    final text = value.text.replaceRange(start, end, token);
-    final caret = start + token.length - caretBack;
-    _controller.value = TextEditingValue(
-      text: text,
-      selection: TextSelection.collapsed(offset: caret),
-    );
-    _onChanged(text);
+    _controller.value =
+        insertToken(_controller.value, token, caretBack: caretBack);
+    _onChanged(_controller.text);
   }
 
   void _submit() {

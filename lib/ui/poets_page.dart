@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../controllers/poets_controller.dart';
 import '../db/poem_repository.dart';
-import '../search/search_sort.dart';
 import '../widgets/common_app_bar_actions.dart';
 import '../widgets/global_control_shortcuts.dart';
 import '../widgets/search_field.dart';
@@ -19,24 +19,19 @@ class PoetsPage extends StatefulWidget {
 }
 
 class _PoetsPageState extends State<PoetsPage> {
-  String _query = '';
+  /// Query state + derived, sorted poet list.
+  late final PoetsController _poetsController = PoetsController(
+    repo: widget.repo,
+  );
+
   final FocusNode _searchFocusNode = FocusNode();
 
   /// Ctrl+F works regardless of what (if anything) currently has keyboard
   /// focus — see [GlobalControlShortcuts].
   late final GlobalControlShortcuts _shortcuts = GlobalControlShortcuts(
-    bindings: {
-      LogicalKeyboardKey.keyF: () => _searchFocusNode.requestFocus(),
-    },
+    bindings: {LogicalKeyboardKey.keyF: () => _searchFocusNode.requestFocus()},
     isActive: () => mounted && (ModalRoute.of(context)?.isCurrent ?? true),
   );
-
-  List<String> get _poets {
-    final base = _query.isEmpty
-        ? widget.repo.poets
-        : widget.repo.searchPoets(_query);
-    return sortPoetsByCount(base, widget.repo.poemCountFor);
-  }
 
   @override
   void initState() {
@@ -47,37 +42,42 @@ class _PoetsPageState extends State<PoetsPage> {
   @override
   void dispose() {
     _shortcuts.dispose();
+    _poetsController.dispose();
     _searchFocusNode.dispose();
     super.dispose();
   }
 
-  void _onQueryChanged(String query) {
-    setState(() => _query = query.trim());
-  }
-
   @override
   Widget build(BuildContext context) {
-    final poets = _poets;
     return Scaffold(
       appBar: AppBar(
         title: const Text('الشعراء'),
         actions: const [CommonAppBarActions()],
       ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: SearchField(
-              hintText: 'ابحث عن شاعر…',
-              autofocus: false,
-              focusNode: _searchFocusNode,
-              onChanged: _onQueryChanged,
-            ),
+      body: ListenableBuilder(
+        listenable: _poetsController,
+        builder: (context, _) => _buildBody(context),
+      ),
+    );
+  }
+
+  Widget _buildBody(BuildContext context) {
+    final poets = _poetsController.poets;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: SearchField(
+            hintText: 'ابحث عن شاعر…',
+            autofocus: false,
+            focusNode: _searchFocusNode,
+            onChanged: _poetsController.setQuery,
           ),
-          Expanded(
-            child: poets.isEmpty
-                ? const Center(child: Text('لا توجد نتائج.'))
-                : ListView.separated(
+        ),
+        Expanded(
+          child: poets.isEmpty
+              ? const Center(child: Text('لا توجد نتائج.'))
+              : ListView.separated(
                   padding: const EdgeInsets.all(12),
                   itemCount: poets.length,
                   separatorBuilder: (_, _) => const SizedBox(height: 4),
@@ -100,9 +100,8 @@ class _PoetsPageState extends State<PoetsPage> {
                     );
                   },
                 ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
