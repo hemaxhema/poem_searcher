@@ -1,5 +1,7 @@
 import 'package:flutter/services.dart';
 
+import '../platform/input_capabilities.dart';
+
 /// Fires [bindings] for Ctrl+`key` presses observed globally via
 /// [HardwareKeyboard], bypassing Flutter's Focus/Shortcuts chain entirely.
 ///
@@ -24,7 +26,12 @@ class GlobalControlShortcuts {
   /// reacting to a shortcut meant for the page now on top.
   final bool Function() isActive;
 
-  void attach() => HardwareKeyboard.instance.addHandler(_onKeyEvent);
+  /// No-op on platforms without a hardware keyboard (see
+  /// [hasHardwareKeyboard]); [dispose] stays safe to call regardless.
+  void attach() {
+    if (!hasHardwareKeyboard) return;
+    HardwareKeyboard.instance.addHandler(_onKeyEvent);
+  }
 
   void dispose() => HardwareKeyboard.instance.removeHandler(_onKeyEvent);
 

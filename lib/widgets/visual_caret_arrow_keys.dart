@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../platform/input_capabilities.dart';
+
 /// Corrects Flutter's arrow-key caret movement (which moves by *logical*
 /// string order) to move by *visual* screen position instead, matching
 /// native text editors. This matters for RTL (Arabic) text, where Flutter's
@@ -27,7 +29,11 @@ class VisualCaretArrowKeys {
   final FocusNode focusNode;
   final TextStyle Function() styleBuilder;
 
+  /// No-op on platforms without a hardware keyboard (see
+  /// [hasHardwareKeyboard]) — the soft keyboard handles caret movement
+  /// natively there; [dispose] stays safe to call regardless.
   void attach() {
+    if (!hasHardwareKeyboard) return;
     HardwareKeyboard.instance.addHandler(_onKeyEvent);
   }
 

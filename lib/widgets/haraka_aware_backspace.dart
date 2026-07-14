@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../platform/input_capabilities.dart';
 import '../search/arabic_normalizer.dart';
 
 /// Makes Backspace remove one trailing diacritic (haraka) at a time instead
@@ -26,7 +27,11 @@ class HarakaAwareBackspace {
 
   _PendingDelete? _pending;
 
+  /// No-op on platforms without a hardware keyboard (see
+  /// [hasHardwareKeyboard]) — the soft keyboard handles backspace natively
+  /// there; [dispose] stays safe to call regardless.
   void attach() {
+    if (!hasHardwareKeyboard) return;
     HardwareKeyboard.instance.addHandler(_onKeyEvent);
     controller.addListener(_onValueChanged);
   }
