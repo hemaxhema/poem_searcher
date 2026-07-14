@@ -598,30 +598,82 @@ class PoemRepository {
 
   /// Boolean counterpart of [_coarseCandidates]: drives the FTS trigram index
   /// off the expression's [BoolExpr.mandatoryDriver] (a probe present in every
-  /// match) when one exists, else a bounded fallback scan, and adds the
-  /// expression's superset predicate ([BoolExpr.toSql]) as the extra filter.
+  /// match) when one exists; else, when [BoolExpr.driverCandidates] supplies a
+  /// disjunctive set (a top-level OR whose branches each have their own
+  /// driver), runs one indexed FTS query per driver and merges/de-dupes the
+  /// results by line id; else falls back to a bounded scan. Always adds the
+  /// expression's superset predicate ([BoolExpr.toSql]) as an extra filter.
   Future<List<Map<String, Object?>>> _coarseCandidatesBoolean(
     BoolExpr expr,
     String? poet,
     Source source,
   ) async {
-    final where = <String>[];
-    final args = <Object?>[];
-    final String from;
-
     final driver = expr.mandatoryDriver();
     if (driver != null) {
-      // No `ESCAPE` clause — see _coarseCandidates for why.
-      from = 'lines_fts f '
-          'JOIN lines l ON l.id = f.rowid '
-          'JOIN poem p ON p.id = l.poem_id '
-          'LEFT JOIN poet po ON po.id = p.poet_id';
-      where.add('f.plain LIKE ?');
-      args.add('%$driver%');
-    } else {
-      from = 'lines l JOIN poem p ON p.id = l.poem_id '
-          'LEFT JOIN poet po ON po.id = p.poet_id';
+      return _ftsCandidatesForDriver(driver, expr, poet, source);
     }
+
+    final drivers = expr.driverCandidates();
+    if (drivers != null) {
+      // One known-good indexed FTS query per branch, merged + de-duped by
+      // line id in Dart — deliberately not combined into one OR'd LIKE (see
+      // _coarseCandidates for why an unverified SQL shape against lines_fts
+      // is risky). Correct because each branch's own mandatoryDriver is
+      // guaranteed present in every match of *that* branch, so the union of
+      // per-branch supersets is a superset of the whole OR's true matches.
+      final merged = <int, Map<String, Object?>>{};
+      for (final d in drivers) {
+        for (final row in await _ftsCandidatesForDriver(d, expr, poet, source)) {
+          merged.putIfAbsent(row['id'] as int, () => row);
+        }
+      }
+      final rows = merged.values.toList(growable: false);
+      return rows.length > _candidateLimit
+          ? rows.sublist(0, _candidateLimit)
+          : rows;
+    }
+
+    final where = <String>[];
+    final args = <Object?>[];
+    const from = 'lines l JOIN poem p ON p.id = l.poem_id '
+        'LEFT JOIN poet po ON po.id = p.poet_id';
+    final predicate = expr.toSql('l.plain', args, _escapeLike);
+    if (predicate != null) where.add(predicate);
+    if (poet != null) {
+      where.add('p.poet_id = (SELECT id FROM poet WHERE name = ?)');
+      args.add(poet);
+    }
+    where.add('(p.source_id = ? OR EXISTS (SELECT 1 FROM poem_alias a '
+        'WHERE a.poem_id = p.id AND a.source_id = ?))');
+    args.add(source.index);
+    args.add(source.index);
+
+    final whereSql = 'WHERE ${where.join(' AND ')}';
+    args.add(_candidateLimit);
+    return _db.rawQuery(
+      'SELECT l.id, l.poem_id, l.line, l.line_number, '
+      'p.title, po.name AS poet, p.line_count '
+      'FROM $from $whereSql LIMIT ?',
+      args,
+    );
+  }
+
+  /// Runs the FTS-trigram-indexed coarse query for a single [driver] literal —
+  /// the exact known-good `f.plain LIKE '%driver%'` shape (no `ESCAPE`; see
+  /// [_coarseCandidates] for why), reused once for [BoolExpr.mandatoryDriver]
+  /// and once per branch when [BoolExpr.driverCandidates] supplies several.
+  Future<List<Map<String, Object?>>> _ftsCandidatesForDriver(
+    String driver,
+    BoolExpr expr,
+    String? poet,
+    Source source,
+  ) async {
+    final where = <String>['f.plain LIKE ?'];
+    final args = <Object?>['%$driver%'];
+    const from = 'lines_fts f '
+        'JOIN lines l ON l.id = f.rowid '
+        'JOIN poem p ON p.id = l.poem_id '
+        'LEFT JOIN poet po ON po.id = p.poet_id';
     final predicate = expr.toSql('l.plain', args, _escapeLike);
     if (predicate != null) where.add(predicate);
     if (poet != null) {

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../db/poem_repository.dart';
 import '../widgets/common_app_bar_actions.dart';
+import '../widgets/global_control_shortcuts.dart';
 import '../widgets/search_field.dart';
 import 'poet_poems_page.dart';
 
@@ -20,11 +21,38 @@ class _PoetsPageState extends State<PoetsPage> {
   String _query = '';
   final FocusNode _searchFocusNode = FocusNode();
 
-  List<String> get _poets =>
-      _query.isEmpty ? widget.repo.poets : widget.repo.searchPoets(_query);
+  /// Ctrl+F works regardless of what (if anything) currently has keyboard
+  /// focus — see [GlobalControlShortcuts].
+  late final GlobalControlShortcuts _shortcuts = GlobalControlShortcuts(
+    bindings: {
+      LogicalKeyboardKey.keyF: () => _searchFocusNode.requestFocus(),
+    },
+    isActive: () => mounted && (ModalRoute.of(context)?.isCurrent ?? true),
+  );
+
+  List<String> get _poets {
+    final base = _query.isEmpty
+        ? widget.repo.poets
+        : widget.repo.searchPoets(_query);
+    final sorted = [...base];
+    sorted.sort((a, b) {
+      final byCount = widget.repo
+          .poemCountFor(b)
+          .compareTo(widget.repo.poemCountFor(a));
+      return byCount != 0 ? byCount : a.compareTo(b);
+    });
+    return sorted;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _shortcuts.attach();
+  }
 
   @override
   void dispose() {
+    _shortcuts.dispose();
     _searchFocusNode.dispose();
     super.dispose();
   }
@@ -41,58 +69,45 @@ class _PoetsPageState extends State<PoetsPage> {
         title: const Text('الشعراء'),
         actions: const [CommonAppBarActions()],
       ),
-      body: CallbackShortcuts(
-        bindings: {
-          const SingleActivator(LogicalKeyboardKey.keyF, control: true): () {
-            _searchFocusNode.requestFocus();
-          },
-        },
-        // CallbackShortcuts only fires while focus is within its subtree, so
-        // wrap the content in an autofocus node that acts as a fallback focus
-        // holder whenever nothing else (search field, a list item) has focus.
-        child: Focus(
-          autofocus: true,
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: SearchField(
-                  hintText: 'ابحث عن شاعر…',
-                  autofocus: false,
-                  focusNode: _searchFocusNode,
-                  onChanged: _onQueryChanged,
-                ),
-              ),
-              Expanded(
-                child: poets.isEmpty
-                    ? const Center(child: Text('لا توجد نتائج.'))
-                    : ListView.separated(
-                      padding: const EdgeInsets.all(12),
-                      itemCount: poets.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 4),
-                      itemBuilder: (context, i) {
-                        final poet = poets[i];
-                        final count = widget.repo.poemCountFor(poet);
-                        return Card(
-                          child: ListTile(
-                            leading: const Icon(Icons.person),
-                            title: Text(poet),
-                            subtitle: Text('$count قصيدة'),
-                            trailing: const Icon(Icons.chevron_left),
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => PoetPoemsPage(
-                                    repo: widget.repo, poet: poet),
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-              ),
-            ],
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: SearchField(
+              hintText: 'ابحث عن شاعر…',
+              autofocus: false,
+              focusNode: _searchFocusNode,
+              onChanged: _onQueryChanged,
+            ),
           ),
-        ),
+          Expanded(
+            child: poets.isEmpty
+                ? const Center(child: Text('لا توجد نتائج.'))
+                : ListView.separated(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: poets.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 4),
+                  itemBuilder: (context, i) {
+                    final poet = poets[i];
+                    final count = widget.repo.poemCountFor(poet);
+                    return Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.person),
+                        title: Text(poet),
+                        subtitle: Text('$count قصيدة'),
+                        trailing: const Icon(Icons.chevron_left),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                PoetPoemsPage(repo: widget.repo, poet: poet),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+          ),
+        ],
       ),
     );
   }

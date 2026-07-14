@@ -10,11 +10,12 @@ import 'tashkeel_search.dart';
 enum SearchSort {
   /// Most-relevant first (by [matchTightness]), which is the order the
   /// repository already emits.
-  relevance('relevance', 'الأكثر صلة'),
+  lineCountDesc('line_count_desc', 'الأطول (عدد الأبيات)'),
+  relevance('relevance', 'الأكثر صلة');
 
   /// The default: longest poems first (by `poem.line_count`), still grouped
   /// by source.
-  lineCountDesc('line_count_desc', 'الأطول (عدد الأبيات)');
+
 
   const SearchSort(this.id, this.label);
 

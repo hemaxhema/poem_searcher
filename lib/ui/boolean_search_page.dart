@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../search/boolean_query.dart';
 import '../widgets/common_app_bar_actions.dart';
+import '../widgets/global_control_shortcuts.dart';
 import '../widgets/haraka_aware_backspace.dart';
 import '../widgets/visual_caret_arrow_keys.dart';
 
@@ -37,6 +38,15 @@ class _BooleanSearchPageState extends State<BooleanSearchPage> {
   late final HarakaAwareBackspace _harakaBackspace;
   late BoolParseResult _parsed = parseBoolean(widget.initialExpression);
 
+  /// Ctrl+F works regardless of what (if anything) currently has keyboard
+  /// focus — see [GlobalControlShortcuts].
+  late final GlobalControlShortcuts _shortcuts = GlobalControlShortcuts(
+    bindings: {
+      LogicalKeyboardKey.keyF: () => _focusNode.requestFocus(),
+    },
+    isActive: () => mounted && (ModalRoute.of(context)?.isCurrent ?? true),
+  );
+
   @override
   void initState() {
     super.initState();
@@ -49,12 +59,14 @@ class _BooleanSearchPageState extends State<BooleanSearchPage> {
       controller: _controller,
       focusNode: _focusNode,
     )..attach();
+    _shortcuts.attach();
   }
 
   @override
   void dispose() {
     _arrowKeys.dispose();
     _harakaBackspace.dispose();
+    _shortcuts.dispose();
     _controller.dispose();
     _focusNode.dispose();
     super.dispose();

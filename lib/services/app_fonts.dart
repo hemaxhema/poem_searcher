@@ -51,6 +51,12 @@ class AppFonts {
   static final ValueNotifier<double> currentResultsFontSize =
       ValueNotifier<double>(22.0);
 
+  /// Currently selected home-page results font family, kept in sync the same
+  /// way as [currentResultsFontSize] — independent of [currentFamily], which
+  /// only affects the poem-detail page.
+  static final ValueNotifier<String> currentResultsFamily =
+      ValueNotifier<String>(defaultFamily);
+
   /// Derives a display label for a font's [familyId] (its filename stem).
   static String labelFor(String familyId) {
     final known = _knownLabels[familyId];

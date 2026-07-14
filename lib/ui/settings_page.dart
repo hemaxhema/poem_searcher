@@ -8,9 +8,11 @@ import '../services/memory_preset_prefs.dart';
 import '../services/poem_display_prefs.dart';
 import '../services/results_display_prefs.dart';
 import '../services/search_sort_prefs.dart';
+import '../services/search_titles_prefs.dart';
 import '../services/source_filter_prefs.dart';
 import '../widgets/common_app_bar_actions.dart';
 import '../widgets/poem_display_settings_dialog.dart';
+import '../widgets/results_display_settings_dialog.dart';
 import '../widgets/section_header.dart';
 import '../widgets/source_filter_dialog.dart';
 
@@ -30,7 +32,8 @@ class _SettingsPageState extends State<SettingsPage> {
   SearchSort _sortMode = SearchSort.lineCountDesc;
   PoemDisplaySettings _display = PoemDisplaySettings.defaults;
   MemoryPreset _memoryPreset = MemoryPreset.balanced;
-  double _resultsFontSize = ResultsDisplayPrefs.defaultFontSize;
+  ResultsDisplaySettings _resultsDisplay = ResultsDisplaySettings.defaults;
+  bool _searchInTitles = SearchTitlesPrefs.defaultEnabled;
 
   @override
   void initState() {
@@ -47,8 +50,11 @@ class _SettingsPageState extends State<SettingsPage> {
     MemoryPresetPrefs.load().then((preset) {
       if (mounted) setState(() => _memoryPreset = preset);
     });
-    ResultsDisplayPrefs.load().then((size) {
-      if (mounted) setState(() => _resultsFontSize = size);
+    ResultsDisplayPrefs.load().then((settings) {
+      if (mounted) setState(() => _resultsDisplay = settings);
+    });
+    SearchTitlesPrefs.load().then((enabled) {
+      if (mounted) setState(() => _searchInTitles = enabled);
     });
   }
 
@@ -73,10 +79,19 @@ class _SettingsPageState extends State<SettingsPage> {
     AppFonts.currentFamily.value = result.fontFamily;
   }
 
-  Future<void> _setResultsFontSize(double size) async {
-    setState(() => _resultsFontSize = size);
-    await ResultsDisplayPrefs.save(size);
-    AppFonts.currentResultsFontSize.value = size;
+  Future<void> _setSearchInTitles(bool enabled) async {
+    setState(() => _searchInTitles = enabled);
+    await SearchTitlesPrefs.save(enabled);
+  }
+
+  Future<void> _openResultsDisplaySettings() async {
+    final result =
+        await showResultsDisplaySettingsDialog(context, _resultsDisplay);
+    if (result == null) return;
+    setState(() => _resultsDisplay = result);
+    await ResultsDisplayPrefs.save(result);
+    AppFonts.currentResultsFontSize.value = result.fontSize;
+    AppFonts.currentResultsFamily.value = result.fontFamily;
   }
 
   Future<void> _setMemoryPreset(MemoryPreset? preset) async {
@@ -123,6 +138,16 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
           const Divider(),
+          const SectionHeader('البحث في العناوين'),
+          SwitchListTile(
+            title: const Text('البحث في العناوين'),
+            subtitle: const Text(
+              'عند إيقافه لن تُبحث العناوين ولن يظهر قسم نتائجها',
+            ),
+            value: _searchInTitles,
+            onChanged: _setSearchInTitles,
+          ),
+          const Divider(),
           const SectionHeader("إعدادات عرض القصائد"),
           ListTile(
             leading: const Icon(Icons.format_size),
@@ -133,18 +158,15 @@ class _SettingsPageState extends State<SettingsPage> {
             onTap: _openDisplaySettings,
           ),
           const Divider(),
-          const SectionHeader('حجم خط نتائج البحث'),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text('${_resultsFontSize.round()}'),
-          ),
-          Slider(
-            value: _resultsFontSize,
-            min: 10,
-            max: 34,
-            divisions: 24,
-            label: '${_resultsFontSize.round()}',
-            onChanged: _setResultsFontSize,
+          const SectionHeader('إعدادات عرض نتائج البحث'),
+          ListTile(
+            leading: const Icon(Icons.format_size),
+            title: const Text('حجم الخط والخط المستخدم لنتائج البحث'),
+            subtitle: Text(
+              '${_resultsDisplay.fontSize.round()} — '
+              '${AppFonts.labelFor(_resultsDisplay.fontFamily)}',
+            ),
+            onTap: _openResultsDisplaySettings,
           ),
           const Divider(),
           const SectionHeader('استهلاك الذاكرة'),

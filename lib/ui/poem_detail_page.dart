@@ -62,11 +62,12 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
   // Cache of Kashida-justified display strings (keyed by line id), memoized so
   // the (moderately expensive) text measurement runs once per poem rather than
   // on every scroll rebuild. Recomputed only when the text scaler, available
-  // width, or font size change.
+  // width, font size, or font family change.
   Map<int, String>? _displayCache;
   TextScaler? _cacheScaler;
   double? _cacheWidth;
   double? _cacheFontSize;
+  String? _cacheFontFamily;
 
   @override
   void initState() {
@@ -107,8 +108,9 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
   }
 
   /// Returns the Kashida-justified display string for every line, memoized on
-  /// the [scaler], [available] width, and [style]'s font size so it is
-  /// computed once per poem (and recomputed if the font size setting changes).
+  /// the [scaler], [available] width, and [style]'s font size and font family
+  /// so it is computed once per poem (and recomputed if any of those change —
+  /// justification widths depend on the font's glyph metrics).
   Map<int, String> _displayFor(
     List<PoemLine> lines,
     TextStyle style,
@@ -118,7 +120,8 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
     if (_displayCache != null &&
         _cacheScaler == scaler &&
         _cacheWidth == available &&
-        _cacheFontSize == style.fontSize) {
+        _cacheFontSize == style.fontSize &&
+        _cacheFontFamily == style.fontFamily) {
       return _displayCache!;
     }
     final map = _computeDisplay(lines, style, scaler, available);
@@ -126,6 +129,7 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
     _cacheScaler = scaler;
     _cacheWidth = available;
     _cacheFontSize = style.fontSize;
+    _cacheFontFamily = style.fontFamily;
     return map;
   }
 

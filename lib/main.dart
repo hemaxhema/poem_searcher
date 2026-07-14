@@ -15,7 +15,9 @@ Future<void> main() async {
   await AppFonts.discoverAndLoad();
   AppFonts.currentFamily.value =
       (await PoemDisplayPrefs.load()).fontFamily;
-  AppFonts.currentResultsFontSize.value = await ResultsDisplayPrefs.load();
+  final resultsDisplay = await ResultsDisplayPrefs.load();
+  AppFonts.currentResultsFontSize.value = resultsDisplay.fontSize;
+  AppFonts.currentResultsFamily.value = resultsDisplay.fontFamily;
   final savedThemeMode = await ThemeModePrefs.load();
   if (savedThemeMode != null) {
     AppTheme.currentMode.value = savedThemeMode;

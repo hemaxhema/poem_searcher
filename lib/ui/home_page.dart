@@ -8,9 +8,11 @@ import '../search/result_dedup.dart';
 import '../search/search_sort.dart';
 import '../services/app_fonts.dart';
 import '../services/search_sort_prefs.dart';
+import '../services/search_titles_prefs.dart';
 import '../services/source_filter_prefs.dart';
 import '../widgets/common_app_bar_actions.dart';
 import '../widgets/count_badge.dart';
+import '../widgets/global_control_shortcuts.dart';
 import '../widgets/highlighted_text.dart';
 import '../widgets/search_field.dart';
 import '../widgets/section_header.dart';
@@ -66,6 +68,11 @@ class _HomePageState extends State<HomePage> {
   /// How results are ordered. Loaded from (and saved to) persisted prefs.
   SearchSort _sortMode = SearchSort.lineCountDesc;
 
+  /// Whether searches also run over poem titles. When false, the titles
+  /// ("عناوين") section is neither searched nor shown. Loaded from persisted
+  /// prefs and refreshed when returning from the settings page.
+  bool _searchInTitles = SearchTitlesPrefs.defaultEnabled;
+
   /// Current 0-based results page. Reset to 0 on every new search.
   int _page = 0;
 
@@ -87,9 +94,20 @@ class _HomePageState extends State<HomePage> {
   /// Drives the results list so a page change can jump back to the top.
   final ScrollController _resultsController = ScrollController();
 
+  /// Ctrl+F/Ctrl+E work regardless of what (if anything) currently has
+  /// keyboard focus — see [GlobalControlShortcuts].
+  late final GlobalControlShortcuts _shortcuts = GlobalControlShortcuts(
+    bindings: {
+      LogicalKeyboardKey.keyF: () => _searchFocusNode.requestFocus(),
+      LogicalKeyboardKey.keyE: () => _openBooleanSearch(),
+    },
+    isActive: () => mounted && (ModalRoute.of(context)?.isCurrent ?? true),
+  );
+
   @override
   void initState() {
     super.initState();
+    _shortcuts.attach();
     SourceFilterPrefs.load().then((order) {
       if (mounted) setState(() => _sourceOrder = order);
     });
@@ -100,6 +118,9 @@ class _HomePageState extends State<HomePage> {
           _applySort();
         });
       }
+    });
+    SearchTitlesPrefs.load().then((enabled) {
+      if (mounted) setState(() => _searchInTitles = enabled);
     });
   }
 
@@ -120,6 +141,7 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    _shortcuts.dispose();
     _searchFocusNode.dispose();
     _firstResultFocusNode.dispose();
     _resultsController.dispose();
@@ -149,9 +171,11 @@ class _HomePageState extends State<HomePage> {
     if (!mounted) return;
     final order = await SourceFilterPrefs.load();
     final sort = await SearchSortPrefs.load();
+    final searchInTitles = await SearchTitlesPrefs.load();
     setState(() {
       _sourceOrder = order;
       _sortMode = sort;
+      _searchInTitles = searchInTitles;
       _applySort();
     });
     _rerunActiveSearch();
@@ -236,8 +260,11 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _runSearch(String query) async {
     final token = ++_searchToken;
+    final titleFuture = _searchInTitles
+        ? widget.repo.searchTitles(query, sourceOrder: _sourceOrder)
+        : Future<List<TitleResult>>.value(const []);
     final results = await Future.wait([
-      widget.repo.searchTitles(query, sourceOrder: _sourceOrder),
+      titleFuture,
       widget.repo.searchLines(query, sourceOrder: _sourceOrder),
     ]);
     // Drop stale results (a newer query started, or the box changed/emptied).
@@ -255,8 +282,11 @@ class _HomePageState extends State<HomePage> {
   /// the boolean repository methods, with the same stale-result guard.
   Future<void> _runBooleanSearch(BoolExpr expr) async {
     final token = ++_searchToken;
+    final titleFuture = _searchInTitles
+        ? widget.repo.searchTitlesBoolean(expr, sourceOrder: _sourceOrder)
+        : Future<List<TitleResult>>.value(const []);
     final results = await Future.wait([
-      widget.repo.searchTitlesBoolean(expr, sourceOrder: _sourceOrder),
+      titleFuture,
       widget.repo.searchLinesBoolean(expr, sourceOrder: _sourceOrder),
     ]);
     // Drop stale results (a newer search started, or boolean mode was cleared).
@@ -327,55 +357,39 @@ class _HomePageState extends State<HomePage> {
           CommonAppBarActions(onOpenSettings: _openSettings),
         ],
       ),
-      body: CallbackShortcuts(
-        bindings: {
-          const SingleActivator(LogicalKeyboardKey.keyF, control: true): () {
-            _searchFocusNode.requestFocus();
-          },
-          const SingleActivator(LogicalKeyboardKey.keyE, control: true): () {
-            _openBooleanSearch();
-          },
-        },
-        // CallbackShortcuts only fires while focus is within its subtree, so
-        // wrap the content in an autofocus node that acts as a fallback focus
-        // holder whenever nothing else (search field, a result tile) has focus.
-        child: Focus(
-          autofocus: true,
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                child: SearchField(
-                  key: ValueKey(_searchFieldEpoch),
-                  focusNode: _searchFocusNode,
-                  debounce: const Duration(seconds: 1),
-                  onChanged: _onQueryChanged,
-                  onSubmitted: _focusFirstResult,
-                ),
-              ),
-              if (_boolDescription != null)
-                _BooleanSearchBanner(
-                  description: _boolDescription!,
-                  onEdit: _openBooleanSearch,
-                  onClear: _clearBooleanSearch,
-                ),
-              Expanded(child: _buildResults()),
-              if (!_isSearching &&
-                  _hasActiveSearch &&
-                  (_titleMatches.isNotEmpty || _lineMatches.isNotEmpty))
-                _ResultsPager(
-                  page: _pageWindow.page,
-                  totalPages: _pageWindow.totalPages,
-                  onPrev: _pageWindow.page > 0
-                      ? () => _goToPage(_pageWindow.page - 1)
-                      : null,
-                  onNext: _pageWindow.page < _pageWindow.totalPages - 1
-                      ? () => _goToPage(_pageWindow.page + 1)
-                      : null,
-                ),
-            ],
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+            child: SearchField(
+              key: ValueKey(_searchFieldEpoch),
+              focusNode: _searchFocusNode,
+              debounce: const Duration(seconds: 1),
+              onChanged: _onQueryChanged,
+              onSubmitted: _focusFirstResult,
+            ),
           ),
-        ),
+          if (_boolDescription != null)
+            _BooleanSearchBanner(
+              description: _boolDescription!,
+              onEdit: _openBooleanSearch,
+              onClear: _clearBooleanSearch,
+            ),
+          Expanded(child: _buildResults()),
+          if (!_isSearching &&
+              _hasActiveSearch &&
+              (_titleMatches.isNotEmpty || _lineMatches.isNotEmpty))
+            _ResultsPager(
+              page: _pageWindow.page,
+              totalPages: _pageWindow.totalPages,
+              onPrev: _pageWindow.page > 0
+                  ? () => _goToPage(_pageWindow.page - 1)
+                  : null,
+              onNext: _pageWindow.page < _pageWindow.totalPages - 1
+                  ? () => _goToPage(_pageWindow.page + 1)
+                  : null,
+            ),
+        ],
       ),
     );
   }
@@ -482,7 +496,7 @@ class _LineResultTile extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               ValueListenableBuilder<String>(
-                valueListenable: AppFonts.currentFamily,
+                valueListenable: AppFonts.currentResultsFamily,
                 builder: (context, family, _) => ValueListenableBuilder<double>(
                   valueListenable: AppFonts.currentResultsFontSize,
                   builder: (context, fontSize, _) => HighlightedText(
@@ -570,7 +584,7 @@ class _TitleResultTile extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               ValueListenableBuilder<String>(
-                valueListenable: AppFonts.currentFamily,
+                valueListenable: AppFonts.currentResultsFamily,
                 builder: (context, family, _) => ValueListenableBuilder<double>(
                   valueListenable: AppFonts.currentResultsFontSize,
                   builder: (context, fontSize, _) => HighlightedText(

@@ -307,8 +307,8 @@ void showHelpDialog(BuildContext context) {
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            'اضغط Ctrl+F في أي وقت للانتقال إلى مربع البحث '
-                            'والتركيز عليه مباشرة.',
+                            'اضغط Ctrl+F في صفحات البحث (الرئيسية، الشعراء، '
+                            'قصائد الشاعر) للتركيز على مربع البحث مباشرة.',
                             style: Theme.of(context).textTheme.bodyMedium,
                           ),
                         ),

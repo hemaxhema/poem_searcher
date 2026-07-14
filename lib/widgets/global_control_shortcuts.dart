@@ -1,0 +1,39 @@
+import 'package:flutter/services.dart';
+
+/// Fires [bindings] for Ctrl+`key` presses observed globally via
+/// [HardwareKeyboard], bypassing Flutter's Focus/Shortcuts chain entirely.
+///
+/// `CallbackShortcuts`/`Shortcuts` only fire while keyboard focus sits
+/// somewhere inside their subtree — in this app that's unreliable, since
+/// nothing may be focused at all (or focus may have moved to a widget
+/// outside the subtree). [VisualCaretArrowKeys] and [HarakaAwareBackspace]
+/// hit the same problem for arrow-key/backspace handling and work around it
+/// the same way: observe key events globally instead of depending on the
+/// focus tree.
+class GlobalControlShortcuts {
+  GlobalControlShortcuts({
+    required this.bindings,
+    required this.isActive,
+  });
+
+  /// Ctrl+`key` bindings to fire on key-down.
+  final Map<LogicalKeyboardKey, VoidCallback> bindings;
+
+  /// Whether this page should currently react to its bindings (e.g. it's the
+  /// topmost route) — prevents an offstage/backgrounded page from also
+  /// reacting to a shortcut meant for the page now on top.
+  final bool Function() isActive;
+
+  void attach() => HardwareKeyboard.instance.addHandler(_onKeyEvent);
+
+  void dispose() => HardwareKeyboard.instance.removeHandler(_onKeyEvent);
+
+  bool _onKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+    if (!HardwareKeyboard.instance.isControlPressed) return false;
+    final action = bindings[event.logicalKey];
+    if (action == null || !isActive()) return false;
+    action();
+    return false;
+  }
+}

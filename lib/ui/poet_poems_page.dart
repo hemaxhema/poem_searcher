@@ -8,6 +8,7 @@ import '../search/search_sort.dart';
 import '../services/search_sort_prefs.dart';
 import '../services/source_filter_prefs.dart';
 import '../widgets/common_app_bar_actions.dart';
+import '../widgets/global_control_shortcuts.dart';
 import '../widgets/highlighted_text.dart';
 import '../widgets/search_field.dart';
 import '../widgets/section_header.dart';
@@ -55,9 +56,19 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
   final FocusNode _searchFocusNode = FocusNode();
   final FocusNode _firstResultFocusNode = FocusNode();
 
+  /// Ctrl+F works regardless of what (if anything) currently has keyboard
+  /// focus — see [GlobalControlShortcuts].
+  late final GlobalControlShortcuts _shortcuts = GlobalControlShortcuts(
+    bindings: {
+      LogicalKeyboardKey.keyF: () => _searchFocusNode.requestFocus(),
+    },
+    isActive: () => mounted && (ModalRoute.of(context)?.isCurrent ?? true),
+  );
+
   @override
   void initState() {
     super.initState();
+    _shortcuts.attach();
     _poemsFuture = widget.repo.poemsByPoet(widget.poet);
     SourceFilterPrefs.load().then((order) {
       if (mounted) setState(() => _sourceOrder = order);
@@ -108,6 +119,7 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
 
   @override
   void dispose() {
+    _shortcuts.dispose();
     _searchFocusNode.dispose();
     _firstResultFocusNode.dispose();
     super.dispose();
@@ -186,49 +198,36 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
           CommonAppBarActions(onOpenSettings: _openSettings),
         ],
       ),
-      body: CallbackShortcuts(
-        bindings: {
-          const SingleActivator(LogicalKeyboardKey.keyF, control: true): () {
-            _searchFocusNode.requestFocus();
-          },
-        },
-        // CallbackShortcuts only fires while focus is within its subtree, so
-        // wrap the content in an autofocus node that acts as a fallback focus
-        // holder whenever nothing else (search field, a list item) has focus.
-        child: FutureBuilder<List<Poem>>(
-          future: _poemsFuture,
-          builder: (context, snapshot) {
-            if (!snapshot.hasData) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            final poems = snapshot.data!;
-            return Focus(
-              autofocus: true,
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: SearchField(
-                      autofocus: false,
-                      hintText: 'ابحث في قصائد ${widget.poet}…',
-                      focusNode: _searchFocusNode,
-                      debounce: const Duration(seconds: 1),
-                      onChanged: _onQueryChanged,
-                      onSubmitted: _focusFirstResult,
-                    ),
-                  ),
-                  Expanded(
-                    child: _query.isEmpty
-                        ? _buildPoemList(poems)
-                        : _isSearching
-                            ? const Center(child: CircularProgressIndicator())
-                            : _buildMatchList(),
-                  ),
-                ],
+      body: FutureBuilder<List<Poem>>(
+        future: _poemsFuture,
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final poems = snapshot.data!;
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: SearchField(
+                  autofocus: false,
+                  hintText: 'ابحث في قصائد ${widget.poet}…',
+                  focusNode: _searchFocusNode,
+                  debounce: const Duration(seconds: 1),
+                  onChanged: _onQueryChanged,
+                  onSubmitted: _focusFirstResult,
+                ),
               ),
-            );
-          },
-        ),
+              Expanded(
+                child: _query.isEmpty
+                    ? _buildPoemList(poems)
+                    : _isSearching
+                        ? const Center(child: CircularProgressIndicator())
+                        : _buildMatchList(),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

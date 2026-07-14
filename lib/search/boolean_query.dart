@@ -53,6 +53,18 @@ sealed class BoolExpr {
   /// pick the FTS trigram driver), or `null` if none is guaranteed.
   String? mandatoryDriver();
 
+  /// A disjunctive set of index-usable probes such that every match of this
+  /// expression is guaranteed to contain *at least one* of them — unlike
+  /// [mandatoryDriver], which guarantees a single probe present in *every*
+  /// match. Used to drive one FTS query per probe when no single
+  /// [mandatoryDriver] exists (the common case: a top-level OR of otherwise-
+  /// narrowable branches). Returns `null` when no such guaranteed set exists;
+  /// never returns an empty list.
+  List<String>? driverCandidates() {
+    final d = mandatoryDriver();
+    return d == null ? null : [d];
+  }
+
   /// Whether this node needs parentheses when embedded in a larger description.
   bool get _needsGroupingInArabic => this is OrExpr || this is AndExpr;
 }
@@ -97,6 +109,21 @@ class OrExpr extends BoolExpr {
 
   @override
   String? mandatoryDriver() => null;
+
+  @override
+  List<String>? driverCandidates() {
+    // Safe only if *every* branch has its own guaranteed probe — one
+    // unnarrowable branch means a real match through it could be missed by
+    // every per-branch FTS query, so the whole set must be discarded (falls
+    // back to the bounded scan, same as today).
+    final drivers = <String>{};
+    for (final option in options) {
+      final d = option.mandatoryDriver();
+      if (d == null) return null;
+      drivers.add(d);
+    }
+    return drivers.toList(growable: false);
+  }
 }
 
 /// Conjunction of signed parts: matches when every positive part matches and no

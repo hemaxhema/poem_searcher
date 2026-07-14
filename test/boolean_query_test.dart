@@ -405,4 +405,34 @@ void main() {
       expect(argsOf('أ + ب + ج'), ['%ا%', '%ب%', '%ج%']);
     });
   });
+
+  group('driverCandidates (multi-driver OR)', () {
+    test('OR of two indexable terms returns both as driver candidates', () {
+      final expr = parseBoolean('محمد , رسول').expr!;
+      expect(expr.driverCandidates(), ['محمد', 'رسول']);
+    });
+    test('one branch shorter than 3 chars makes the whole OR unnarrowable', () {
+      final expr = parseBoolean('محمد , من').expr!; // 'من' is 2 chars
+      expect(expr.driverCandidates(), isNull);
+    });
+    test('an AND branch inside an OR contributes its own best mandatoryDriver',
+        () {
+      final expr = parseBoolean('(حب + محبةعظيمة) , رسول').expr!;
+      expect(expr.driverCandidates(), ['محبةعظيمة', 'رسول']);
+    });
+    test('duplicate probes across branches are de-duplicated', () {
+      final expr = parseBoolean('محمد , محمد').expr!;
+      expect(expr.driverCandidates(), ['محمد']);
+    });
+    test(
+        'a parenthesized nested OR as one branch of an outer OR stays '
+        'unnarrowable (deliberately out of scope for this fix)', () {
+      final expr = parseBoolean('(محمد , رسول) , نبي').expr!;
+      expect(expr.driverCandidates(), isNull);
+    });
+    test('a plain AND (no OR) still exposes its mandatoryDriver as one', () {
+      final expr = parseBoolean('حب + محبةعظيمة').expr!;
+      expect(expr.driverCandidates(), ['محبةعظيمة']);
+    });
+  });
 }
