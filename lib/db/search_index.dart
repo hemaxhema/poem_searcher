@@ -17,7 +17,7 @@
 ///   * indexes on `lines(poem_id)`, `poem(poet_id)`, `poem(source_id)`.
 library;
 
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:sqflite_common/sqlite_api.dart';
 
 import '../models/source.dart';
 import '../search/arabic_normalizer.dart';

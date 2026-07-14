@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'db/poem_repository.dart';
+import 'platform/bootstrap_selector.dart';
 import 'services/app_fonts.dart';
 import 'services/memory_preset_prefs.dart';
 import 'services/poem_display_prefs.dart';
@@ -71,6 +72,7 @@ class _BootstrapState extends State<_Bootstrap> {
   Future<PoemRepository> _openRepo() async {
     final preset = await MemoryPresetPrefs.load();
     return PoemRepository.open(
+      bootstrap: createDatabaseBootstrap(),
       onIndexProgress: _onIndexProgress,
       preset: preset,
     );

@@ -1,26 +1,14 @@
-import 'dart:io';
-
-import 'package:flutter/services.dart' show rootBundle;
-import 'package:path/path.dart' as p;
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:sqflite_common/sqlite_api.dart';
 
 import '../models/poem.dart';
 import '../models/poem_line.dart';
 import '../models/source.dart';
+import '../platform/database_bootstrap.dart';
+import 'database_preparer.dart';
 import 'memory_preset.dart';
 import '../search/boolean_query.dart';
 import '../search/tashkeel_search.dart';
 import 'search_index.dart';
-
-/// Path of the database bundled as a Flutter asset.
-const String _assetDbPath = 'assets/database/DB_Poems.db';
-
-/// File name of the writable copy kept next to the executable.
-const String _dbFileName = 'DB_Poems.db';
-
-/// Bump this whenever a new database asset ships so the previously copied
-/// writable file is refreshed on next launch (see [_prepareDatabase]).
-const String _dbAssetVersion = '10';
 
 /// Upper bound on rows pulled from the coarse SQL filter before the precise
 /// regex confirms them. Keeps a broad query from scanning the whole table.
@@ -134,19 +122,20 @@ class PoemRepository {
   /// Opens the database and loads the poet index. Call once at startup.
   ///
   /// The bundled asset is "lean" (verse text + metadata only). The first launch
-  /// — and any launch after a [_dbAssetVersion] bump — copies it to a writable
+  /// — and any launch after a [dbAssetVersion] bump — copies it to a writable
   /// location and builds the `plain` / `title_plain` / trigram-FTS search index
-  /// there. That is a one-time, multi-minute step whose progress is reported via
-  /// [onIndexProgress]; later launches reuse the built copy and open instantly.
+  /// there (see [prepareDatabase]). That is a one-time, multi-minute step whose
+  /// progress is reported via [onIndexProgress]; later launches reuse the built
+  /// copy and open instantly. [bootstrap] supplies the platform-specific SQLite
+  /// factory and file locations.
   static Future<PoemRepository> open({
+    required DatabaseBootstrap bootstrap,
     IndexProgress? onIndexProgress,
     MemoryPreset preset = MemoryPreset.balanced,
   }) async {
-    sqfliteFfiInit();
-    databaseFactory = databaseFactoryFfi;
-
-    final dbPath = await _prepareDatabase(onIndexProgress);
-    final db = await databaseFactory.openDatabase(
+    final dbPath =
+        await prepareDatabase(bootstrap, onProgress: onIndexProgress);
+    final db = await bootstrap.databaseFactory.openDatabase(
       dbPath,
       options: OpenDatabaseOptions(readOnly: true),
     );
@@ -178,62 +167,6 @@ class PoemRepository {
     } catch (_) {
       // Tuning is an optimization only; ignore if the platform rejects a PRAGMA.
     }
-  }
-
-  /// Ensures a fully-indexed, writable copy of the database exists and returns
-  /// its path. The version marker is written only *after* a successful index
-  /// build, so an interrupted first run re-copies and rebuilds on the next
-  /// launch instead of leaving a half-built database in use.
-  ///
-  /// Stored next to the executable (inside the install directory) rather than
-  /// in per-user app-data, so uninstalling the program — which removes its
-  /// install directory — takes the writable database with it. This requires
-  /// the install directory (or at least this `db` subfolder) to be writable by
-  /// the user running the app; a system-wide install under Program Files must
-  /// grant that explicitly (e.g. an Inno Setup `Permissions: users-modify` on
-  /// this subfolder), since standard users can't otherwise write there.
-  static Future<String> _prepareDatabase(IndexProgress? onProgress) async {
-    final installDir = p.dirname(Platform.resolvedExecutable);
-    final target = p.join(installDir, 'db', _dbFileName);
-    final marker = File('$target.version');
-
-    final ready = await File(target).exists() &&
-        await marker.exists() &&
-        (await marker.readAsString()).trim() == _dbAssetVersion;
-    if (ready) return target;
-
-    await _copyAssetTo(target);
-
-    // Build the search index in the writable copy (opened read-write).
-    final db = await databaseFactory.openDatabase(target);
-    try {
-      await buildSearchIndex(db, onProgress: onProgress);
-    } finally {
-      await db.close();
-    }
-    await marker.writeAsString(_dbAssetVersion, flush: true);
-    return target;
-  }
-
-  /// Copies the bundled (lean) asset DB to [target]. Prefers a streaming file
-  /// copy of the on-disk asset — Flutter unpacks declared assets to real files
-  /// under the executable's `data/flutter_assets/`, so this never holds the
-  /// whole database in memory. Falls back to loading it through the asset
-  /// bundle only for unusual packaging where that file can't be located.
-  static Future<void> _copyAssetTo(String target) async {
-    await Directory(p.dirname(target)).create(recursive: true);
-    final assetOnDisk = p.join(
-      p.dirname(Platform.resolvedExecutable),
-      'data',
-      'flutter_assets',
-      _assetDbPath,
-    );
-    if (await File(assetOnDisk).exists()) {
-      await File(assetOnDisk).copy(target);
-      return;
-    }
-    final bytes = await rootBundle.load(_assetDbPath);
-    await File(target).writeAsBytes(bytes.buffer.asUint8List(), flush: true);
   }
 
   Future<void> _loadPoets() async {

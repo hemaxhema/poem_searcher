@@ -15,6 +15,10 @@ dependencies:
 
   cupertino_icons: ^1.0.8
 
+  # Platform-neutral SQLite API types (Database/DatabaseFactory) used by the
+  # shared code; each platform supplies its own factory implementation.
+  sqflite_common: ^2.5.0
+
   # SQLite on desktop (FFI) + bundled native library for Windows.
   sqflite_common_ffi: ^2.3.3
   sqlite3_flutter_libs: ^0.5.24
