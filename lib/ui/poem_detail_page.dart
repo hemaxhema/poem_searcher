@@ -1,17 +1,14 @@
-import 'dart:math';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:url_launcher/url_launcher.dart';
 
+import '../controllers/poem_detail_controller.dart';
 import '../db/poem_repository.dart';
 import '../models/poem.dart';
 import '../models/poem_line.dart';
-import '../services/app_fonts.dart';
-import '../services/poem_display_prefs.dart';
-import '../util/kashida.dart';
+import '../services/url_opener.dart';
 import '../widgets/common_app_bar_actions.dart';
 import '../widgets/poem_display_settings_dialog.dart';
+import 'kashida_display.dart';
 import 'settings_page.dart';
 
 /// Shows a full poem: metadata header + every bayt, each rendered as a single
@@ -35,15 +32,12 @@ class PoemDetailPage extends StatefulWidget {
 }
 
 class _PoemDetailPageState extends State<PoemDetailPage> {
-  late Future<List<PoemLine>> _linesFuture;
-
-  /// Poem metadata for the header/title, loaded on demand (the repository no
-  /// longer preloads every poem into memory). Null until it resolves.
-  Poem? _poem;
-
-  /// Every source this poem is available from (its own + any duplicates merged
-  /// into it), shown as chips/links in the header. Empty until it resolves.
-  List<({String name, String? url})> _sources = const [];
+  /// The poem's data and display settings; this widget renders it and keeps
+  /// only visual concerns (scrolling, clipboard, kashida measurement).
+  late final PoemDetailController _detail = PoemDetailController(
+    repo: widget.repo,
+    poemId: widget.poemId,
+  );
 
   final ScrollController _scrollController = ScrollController();
 
@@ -55,37 +49,18 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
   /// again on later rebuilds (e.g. after prefs load or the user scrolls away).
   bool _didAutoScroll = false;
 
-  /// User-adjustable verse font size and inter-bayt spacing, loaded from (and
-  /// saved to) persisted prefs so the choice survives app restarts.
-  PoemDisplaySettings _display = PoemDisplaySettings.defaults;
-
-  // Cache of Kashida-justified display strings (keyed by line id), memoized so
-  // the (moderately expensive) text measurement runs once per poem rather than
-  // on every scroll rebuild. Recomputed only when the text scaler, available
-  // width, font size, or font family change.
-  Map<int, String>? _displayCache;
-  TextScaler? _cacheScaler;
-  double? _cacheWidth;
-  double? _cacheFontSize;
-  String? _cacheFontFamily;
+  /// Memoized kashida-justified display strings (see [KashidaDisplayCache]).
+  final KashidaDisplayCache _kashidaCache = KashidaDisplayCache();
 
   @override
   void initState() {
     super.initState();
-    _linesFuture = widget.repo.linesOfPoem(widget.poemId);
-    widget.repo.poemById(widget.poemId).then((poem) {
-      if (mounted) setState(() => _poem = poem);
-    });
-    widget.repo.sourcesOfPoem(widget.poemId).then((sources) {
-      if (mounted) setState(() => _sources = sources);
-    });
-    PoemDisplayPrefs.load().then((settings) {
-      if (mounted) setState(() => _display = settings);
-    });
+    _detail.load();
   }
 
   @override
   void dispose() {
+    _detail.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -107,107 +82,26 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
     );
   }
 
-  /// Returns the Kashida-justified display string for every line, memoized on
-  /// the [scaler], [available] width, and [style]'s font size and font family
-  /// so it is computed once per poem (and recomputed if any of those change —
-  /// justification widths depend on the font's glyph metrics).
-  Map<int, String> _displayFor(
-    List<PoemLine> lines,
-    TextStyle style,
-    TextScaler scaler,
-    double available,
-  ) {
-    if (_displayCache != null &&
-        _cacheScaler == scaler &&
-        _cacheWidth == available &&
-        _cacheFontSize == style.fontSize &&
-        _cacheFontFamily == style.fontFamily) {
-      return _displayCache!;
-    }
-    final map = _computeDisplay(lines, style, scaler, available);
-    _displayCache = map;
-    _cacheScaler = scaler;
-    _cacheWidth = available;
-    _cacheFontSize = style.fontSize;
-    _cacheFontFamily = style.fontFamily;
-    return map;
-  }
-
-  /// Builds the elongated "sadr = ajz" strings. Every hemistich is stretched to
-  /// a single common half-width `H` (the widest natural hemistich in the poem,
-  /// capped so the line still fits [available]), so all bayts end up the same
-  /// width, sadr and ajz are equal, and the `=` aligns in one central column.
-  ///
-  /// Lines without a `=` (single hemistich) are stretched to the width of a whole
-  /// normal verse: `2*H + separator` when the poem has two-hemistich lines, or —
-  /// for a poem that has no `=` at all — the width of the widest single line.
-  Map<int, String> _computeDisplay(
-    List<PoemLine> lines,
-    TextStyle style,
-    TextScaler scaler,
-    double available,
-  ) {
-    final sepWidth = measureTextWidth(' = ', style, scaler);
-
-    var maxHalf = 0.0;
-    var maxSingle = 0.0;
-    var hasTwoHemistichs = false;
-    for (final line in lines) {
-      if (line.hasTwoHemistichs) {
-        hasTwoHemistichs = true;
-        maxHalf = max(maxHalf, measureTextWidth(line.sadr, style, scaler));
-        maxHalf = max(maxHalf, measureTextWidth(line.ajz, style, scaler));
-      } else {
-        maxSingle = max(maxSingle, measureTextWidth(line.line, style, scaler));
-      }
-    }
-    // Never let a justified line grow past the available width (else it wraps).
-    final capHalf = (available - sepWidth) / 2;
-    final halfTarget = min(maxHalf, capHalf);
-    // Width of a whole normal verse. Single-hemistich lines are stretched to
-    // this. When the poem has no `=` anywhere, the widest single line sets it.
-    final fullTarget = hasTwoHemistichs
-        ? min(2 * halfTarget + sepWidth, available)
-        : min(maxSingle, available);
-
-    final map = <int, String>{};
-    for (final line in lines) {
-      if (line.hasTwoHemistichs) {
-        final sadr = kashidaJustify(line.sadr, style, halfTarget, scaler);
-        final ajz = kashidaJustify(line.ajz, style, halfTarget, scaler);
-        map[line.id] = '$sadr = $ajz';
-      } else {
-        map[line.id] = kashidaJustify(line.line, style, fullTarget, scaler);
-      }
-    }
-    return map;
-  }
-
   /// Opens the consolidated Settings page; on return, reloads the poem
   /// display settings (font/size/spacing) since they may have changed there.
   Future<void> _openSettings() async {
     await Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => const SettingsPage()));
     if (!mounted) return;
-    final display = await PoemDisplayPrefs.load();
-    setState(() => _display = display);
+    await _detail.reloadDisplayPrefs();
   }
 
   /// Opens the poem display settings dialog directly (font/size/spacing),
   /// without navigating to the full Settings page.
   Future<void> _openDisplaySettings() async {
-    final result = await showPoemDisplaySettingsDialog(context, _display);
+    final result = await showPoemDisplaySettingsDialog(context, _detail.display);
     if (result == null) return;
-    setState(() => _display = result);
-    await PoemDisplayPrefs.save(result);
-    AppFonts.currentFamily.value = result.fontFamily;
+    await _detail.setDisplay(result);
   }
 
   Future<void> _copyPoem() async {
-    final lines = await _linesFuture;
-    final text = groupByLineNumber(lines)
-        .map((group) => group.first.line)
-        .join('\n');
+    final text = _detail.buildCopyText();
+    if (text.isEmpty) return; // Lines still loading.
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -217,110 +111,109 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
 
   @override
   Widget build(BuildContext context) {
-    final Poem? poem = _poem;
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(poem?.title ?? 'القصيدة'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.format_size),
-            tooltip: 'إعدادات العرض',
-            onPressed: _openDisplaySettings,
+    return ListenableBuilder(
+      listenable: _detail,
+      builder: (context, _) {
+        final Poem? poem = _detail.poem;
+        return Scaffold(
+          appBar: AppBar(
+            title: Text(poem?.title ?? 'القصيدة'),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.format_size),
+                tooltip: 'إعدادات العرض',
+                onPressed: _openDisplaySettings,
+              ),
+              IconButton(
+                icon: const Icon(Icons.copy),
+                tooltip: 'نسخ القصيدة',
+                onPressed: _copyPoem,
+              ),
+              CommonAppBarActions(onOpenSettings: _openSettings),
+            ],
           ),
-          IconButton(
-            icon: const Icon(Icons.copy),
-            tooltip: 'نسخ القصيدة',
-            onPressed: _copyPoem,
+          body: SelectionArea(child: _buildBody(context, poem)),
+        );
+      },
+    );
+  }
+
+  Widget _buildBody(BuildContext context, Poem? poem) {
+    final lines = _detail.lines;
+    if (lines == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    final display = _detail.display;
+    final theme = Theme.of(context);
+    final verseStyle = theme.textTheme.titleLarge?.copyWith(
+          height: 0.8,
+          fontFamily: display.fontFamily,
+          fontSize: display.fontSize,
+        ) ??
+        TextStyle(
+          fontFamily: display.fontFamily,
+          fontSize: display.fontSize,
+        );
+    final scaler = MediaQuery.textScalerOf(context);
+    // Once the poem is laid out, bring the searched line to the centre
+    // of the viewport. Scheduled after the frame so the target tile's
+    // context/geometry exists; _maybeAutoScroll only fires once.
+    if (widget.highlightLineId != null && !_didAutoScroll) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAutoScroll());
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Text width available inside a bayt tile: the viewport minus
+        // the ListView's horizontal padding (8*2), the tile's own
+        // horizontal padding (4*2), and room for the variants badge
+        // + its margin so tiles with a badge never overflow.
+        final available = constraints.maxWidth -
+            16 -
+            8 -
+            8 -
+            _BaytTile.reservedBadgeWidth;
+        final displayText =
+            _kashidaCache.displayFor(lines, verseStyle, scaler, available);
+        // SingleChildScrollView + Column (rather than a lazy ListView)
+        // so every bayt is laid out up front; this lets
+        // Scrollable.ensureVisible centre the searched line even when
+        // it starts far off-screen. Poems are bounded (tens of bayts),
+        // so eager layout is cheap.
+        return SingleChildScrollView(
+          controller: _scrollController,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (poem != null)
+                _PoemHeader(poem: poem, sources: _detail.sources),
+              const SizedBox(height: 8),
+              for (final group in _detail.lineGroups)
+                _BaytTile(
+                  key: group.any((l) => l.id == widget.highlightLineId)
+                      ? _highlightKey
+                      : null,
+                  displayText:
+                      displayText[group.first.id] ?? group.first.line,
+                  highlighted:
+                      group.any((l) => l.id == widget.highlightLineId),
+                  primary: group.first,
+                  fontSize: display.fontSize,
+                  fontFamily: display.fontFamily,
+                  lineSpacing: display.lineSpacing,
+                  variants:
+                      group.length > 1 ? group.sublist(1) : const <PoemLine>[],
+                ),
+            ],
           ),
-          CommonAppBarActions(onOpenSettings: _openSettings),
-        ],
-      ),
-      body: SelectionArea(
-        child: FutureBuilder<List<PoemLine>>(
-          future: _linesFuture,
-          builder: (context, snapshot) {
-            if (!snapshot.hasData) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            final lines = snapshot.data!;
-            final theme = Theme.of(context);
-            final verseStyle = theme.textTheme.titleLarge?.copyWith(
-                  height: 0.8,
-                  fontFamily: _display.fontFamily,
-                  fontSize: _display.fontSize,
-                ) ??
-                TextStyle(
-                  fontFamily: _display.fontFamily,
-                  fontSize: _display.fontSize,
-                );
-            final scaler = MediaQuery.textScalerOf(context);
-            // Once the poem is laid out, bring the searched line to the centre
-            // of the viewport. Scheduled after the frame so the target tile's
-            // context/geometry exists; _maybeAutoScroll only fires once.
-            if (widget.highlightLineId != null && !_didAutoScroll) {
-              WidgetsBinding.instance
-                  .addPostFrameCallback((_) => _maybeAutoScroll());
-            }
-            return LayoutBuilder(
-              builder: (context, constraints) {
-                // Text width available inside a bayt tile: the viewport minus
-                // the ListView's horizontal padding (8*2), the tile's own
-                // horizontal padding (4*2), and room for the variants badge
-                // + its margin so tiles with a badge never overflow.
-                final available = constraints.maxWidth -
-                    16 -
-                    8 -
-                    8 -
-                    _BaytTile.reservedBadgeWidth;
-                final display = _displayFor(lines, verseStyle, scaler, available);
-                // SingleChildScrollView + Column (rather than a lazy ListView)
-                // so every bayt is laid out up front; this lets
-                // Scrollable.ensureVisible centre the searched line even when
-                // it starts far off-screen. Poems are bounded (tens of bayts),
-                // so eager layout is cheap.
-                return SingleChildScrollView(
-                  controller: _scrollController,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (poem != null)
-                        _PoemHeader(poem: poem, sources: _sources),
-                      const SizedBox(height: 8),
-                      for (final group in groupByLineNumber(lines))
-                        _BaytTile(
-                          key: group.any((l) => l.id == widget.highlightLineId)
-                              ? _highlightKey
-                              : null,
-                          displayText:
-                              display[group.first.id] ?? group.first.line,
-                          highlighted:
-                              group.any((l) => l.id == widget.highlightLineId),
-                          primary: group.first,
-                          fontSize: _display.fontSize,
-                          fontFamily: _display.fontFamily,
-                          lineSpacing: _display.lineSpacing,
-                          variants: group.length > 1
-                              ? group.sublist(1)
-                              : const <PoemLine>[],
-                        ),
-                    ],
-                  ),
-                );
-              },
-            );
-          },
-        ),
-      ),
+        );
+      },
     );
   }
 }
 
 Future<void> _openSourceUrl(BuildContext context, String url) async {
-  final uri = Uri.tryParse(url);
-  final ok =
-      uri != null && await launchUrl(uri, mode: LaunchMode.externalApplication);
+  final ok = await openExternalUrl(url);
   if (!ok && context.mounted) {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('تعذر فتح الرابط')),
@@ -436,7 +329,7 @@ class _BaytTile extends StatelessWidget {
   });
 
   /// The Kashida-justified "sadr = ajz" text to render (see
-  /// [_PoemDetailPageState._computeDisplay]). Kept separate from [PoemLine.line]
+  /// [computeKashidaDisplay]). Kept separate from [PoemLine.line]
   /// so the clean source text is still used for the copy-all action.
   final String displayText;
   final bool highlighted;
