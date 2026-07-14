@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:poem_searcher/ui/results_pagination.dart';
+import 'package:poem_searcher/search/results_pagination.dart';
 
 void main() {
   group('PageWindow.compute', () {

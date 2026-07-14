@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../db/poem_repository.dart';
+import '../search/search_sort.dart';
 import '../widgets/common_app_bar_actions.dart';
 import '../widgets/global_control_shortcuts.dart';
 import '../widgets/search_field.dart';
@@ -34,14 +35,7 @@ class _PoetsPageState extends State<PoetsPage> {
     final base = _query.isEmpty
         ? widget.repo.poets
         : widget.repo.searchPoets(_query);
-    final sorted = [...base];
-    sorted.sort((a, b) {
-      final byCount = widget.repo
-          .poemCountFor(b)
-          .compareTo(widget.repo.poemCountFor(a));
-      return byCount != 0 ? byCount : a.compareTo(b);
-    });
-    return sorted;
+    return sortPoetsByCount(base, widget.repo.poemCountFor);
   }
 
   @override

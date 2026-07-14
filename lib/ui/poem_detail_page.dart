@@ -183,22 +183,6 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
     return map;
   }
 
-  /// Groups consecutive rows sharing the same [PoemLine.lineNumber] (rows are
-  /// already ordered by `line_number, id`), so alternate readings (riwayat)
-  /// of the same bayt end up in one group instead of separate tiles.
-  List<List<PoemLine>> _groupByLineNumber(List<PoemLine> lines) {
-    final groups = <List<PoemLine>>[];
-    for (final line in lines) {
-      if (groups.isNotEmpty &&
-          groups.last.first.lineNumber == line.lineNumber) {
-        groups.last.add(line);
-      } else {
-        groups.add([line]);
-      }
-    }
-    return groups;
-  }
-
   /// Opens the consolidated Settings page; on return, reloads the poem
   /// display settings (font/size/spacing) since they may have changed there.
   Future<void> _openSettings() async {
@@ -221,7 +205,7 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
 
   Future<void> _copyPoem() async {
     final lines = await _linesFuture;
-    final text = _groupByLineNumber(lines)
+    final text = groupByLineNumber(lines)
         .map((group) => group.first.line)
         .join('\n');
     await Clipboard.setData(ClipboardData(text: text));
@@ -304,7 +288,7 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
                       if (poem != null)
                         _PoemHeader(poem: poem, sources: _sources),
                       const SizedBox(height: 8),
-                      for (final group in _groupByLineNumber(lines))
+                      for (final group in groupByLineNumber(lines))
                         _BaytTile(
                           key: group.any((l) => l.id == widget.highlightLineId)
                               ? _highlightKey

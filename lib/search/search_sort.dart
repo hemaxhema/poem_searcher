@@ -67,6 +67,21 @@ List<LineResult> sortLineResults(
 /// Reorders confirmed title results according to [sort], preserving the source
 /// grouping in [order]. See [sortLineResults] for the ordering rationale and the
 /// accuracy caveat.
+/// Orders poet names by poem count (descending), breaking ties by name
+/// (ascending). [poemCountOf] supplies each poet's poem count (see
+/// `PoemRepository.poemCountFor`). Returns a new list; the input is untouched.
+List<String> sortPoetsByCount(
+  List<String> poets,
+  int Function(String poet) poemCountOf,
+) {
+  final sorted = [...poets];
+  sorted.sort((a, b) {
+    final byCount = poemCountOf(b).compareTo(poemCountOf(a));
+    return byCount != 0 ? byCount : a.compareTo(b);
+  });
+  return sorted;
+}
+
 List<TitleResult> sortTitleResults(
   List<TitleResult> results,
   SearchSort sort,

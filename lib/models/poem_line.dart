@@ -39,3 +39,18 @@ class PoemLine {
         lineType: row['line_type'] as String?,
       );
 }
+
+/// Groups consecutive rows sharing the same [PoemLine.lineNumber] (rows are
+/// already ordered by `line_number, id`), so alternate readings (riwayat)
+/// of the same bayt end up in one group instead of separate tiles.
+List<List<PoemLine>> groupByLineNumber(List<PoemLine> lines) {
+  final groups = <List<PoemLine>>[];
+  for (final line in lines) {
+    if (groups.isNotEmpty && groups.last.first.lineNumber == line.lineNumber) {
+      groups.last.add(line);
+    } else {
+      groups.add([line]);
+    }
+  }
+  return groups;
+}

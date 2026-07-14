@@ -21,7 +21,7 @@ import '../widgets/source_filter_dialog.dart';
 import 'boolean_search_page.dart';
 import 'poem_detail_page.dart';
 import 'poets_page.dart';
-import 'results_pagination.dart';
+import '../search/results_pagination.dart';
 import 'settings_page.dart';
 
 /// Main screen: a search bar with live tashkeel-aware results underneath.
