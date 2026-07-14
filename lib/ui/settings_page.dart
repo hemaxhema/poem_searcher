@@ -10,6 +10,7 @@ import '../services/results_display_prefs.dart';
 import '../services/search_sort_prefs.dart';
 import '../services/search_titles_prefs.dart';
 import '../services/source_filter_prefs.dart';
+import '../widgets/about_dialog.dart';
 import '../widgets/common_app_bar_actions.dart';
 import '../widgets/poem_display_settings_dialog.dart';
 import '../widgets/results_display_settings_dialog.dart';
@@ -182,6 +183,13 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
               ],
             ),
+          ),
+          const Divider(),
+          const SectionHeader('حول البرنامج'),
+          ListTile(
+            leading: const Icon(Icons.info_outline),
+            title: const Text('حول البرنامج'),
+            onTap: () => showAppAboutDialog(context),
           ),
         ],
       ),
