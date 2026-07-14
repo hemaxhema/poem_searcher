@@ -1,12 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../controllers/search_controller.dart';
 import '../db/poem_repository.dart';
 import '../models/poem.dart';
-import '../models/source.dart';
 import '../search/search_sort.dart';
-import '../services/search_sort_prefs.dart';
-import '../services/source_filter_prefs.dart';
 import '../widgets/common_app_bar_actions.dart';
 import '../widgets/global_control_shortcuts.dart';
 import '../widgets/highlighted_text.dart';
@@ -29,29 +27,14 @@ class PoetPoemsPage extends StatefulWidget {
 
 class _PoetPoemsPageState extends State<PoetPoemsPage> {
   late Future<List<Poem>> _poemsFuture;
-  String _query = '';
 
-  /// Repository output, in relevance order. Display lists are derived from these
-  /// by [_applySort].
-  List<TitleResult> _rawTitleMatches = const [];
-  List<LineResult> _rawMatches = const [];
-
-  /// Display lists (sorted per [_sortMode]) that the result views read.
-  List<TitleResult> _titleMatches = const [];
-  List<LineResult> _matches = const [];
-
-  /// How results are ordered. Loaded from persisted prefs (shared with home).
-  SearchSort _sortMode = SearchSort.lineCountDesc;
-
-  /// True while a search is in flight, so the results area can show a
-  /// loading spinner instead of stale results during the DB query.
-  bool _isSearching = false;
-
-  int _searchToken = 0;
-
-  /// Selected sources, in search priority order. Read from persisted prefs
-  /// (the source of truth, set via the home page's filter dialog).
-  List<Source> _sourceOrder = Source.values;
+  /// All search state and orchestration, scoped to this poet; titles are
+  /// always searched here (no titles-toggle pref, unlike the home page).
+  late final PoemSearchController _search = PoemSearchController(
+    api: widget.repo,
+    poet: widget.poet,
+    useTitlesPref: false,
+  );
 
   final FocusNode _searchFocusNode = FocusNode();
   final FocusNode _firstResultFocusNode = FocusNode();
@@ -70,35 +53,7 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
     super.initState();
     _shortcuts.attach();
     _poemsFuture = widget.repo.poemsByPoet(widget.poet);
-    SourceFilterPrefs.load().then((order) {
-      if (mounted) setState(() => _sourceOrder = order);
-    });
-    SearchSortPrefs.load().then((sort) {
-      if (mounted) {
-        setState(() {
-          _sortMode = sort;
-          _applySort();
-        });
-      }
-    });
-  }
-
-  /// Derives the display lists from the raw (relevance-ordered) results per the
-  /// current [_sortMode] and source order. Cheap in-memory reorder — no DB hit.
-  void _applySort() {
-    _titleMatches = sortTitleResults(_rawTitleMatches, _sortMode, _sourceOrder);
-    _matches = sortLineResults(_rawMatches, _sortMode, _sourceOrder);
-  }
-
-  /// Switches the result sort mode, reordering already-fetched results in memory
-  /// (no query, no [_searchToken] change) and persisting the choice.
-  Future<void> _setSortMode(SearchSort mode) async {
-    if (mode == _sortMode) return;
-    setState(() {
-      _sortMode = mode;
-      _applySort();
-    });
-    await SearchSortPrefs.save(mode);
+    _search.loadPrefs();
   }
 
   /// Opens the consolidated Settings page; on return, reloads the source
@@ -107,62 +62,22 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
     await Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => const SettingsPage()));
     if (!mounted) return;
-    final order = await SourceFilterPrefs.load();
-    final sort = await SearchSortPrefs.load();
-    setState(() {
-      _sourceOrder = order;
-      _sortMode = sort;
-      _applySort();
-    });
-    if (_query.isNotEmpty) _runSearch(_query);
+    await _search.reloadPrefsAndRerun();
   }
 
   @override
   void dispose() {
     _shortcuts.dispose();
+    _search.dispose();
     _searchFocusNode.dispose();
     _firstResultFocusNode.dispose();
     super.dispose();
   }
 
   void _focusFirstResult() {
-    if (_titleMatches.isNotEmpty || _matches.isNotEmpty) {
+    if (_search.sortedTitles.isNotEmpty || _search.sortedLines.isNotEmpty) {
       _firstResultFocusNode.requestFocus();
     }
-  }
-
-  // SearchField already debounces keystrokes (see its `debounce` parameter
-  // below), so this only needs to dispatch the (already-settled) query.
-  void _onQueryChanged(String query) {
-    final trimmed = query.trim();
-    _query = trimmed;
-    if (trimmed.isEmpty) {
-      setState(() {
-        _titleMatches = const [];
-        _matches = const [];
-        _isSearching = false;
-      });
-      return;
-    }
-    setState(() => _isSearching = true);
-    _runSearch(trimmed);
-  }
-
-  Future<void> _runSearch(String query) async {
-    final token = ++_searchToken;
-    final results = await Future.wait([
-      widget.repo
-          .searchTitles(query, poet: widget.poet, sourceOrder: _sourceOrder),
-      widget.repo
-          .searchLines(query, poet: widget.poet, sourceOrder: _sourceOrder),
-    ]);
-    if (!mounted || token != _searchToken || query != _query) return;
-    setState(() {
-      _rawTitleMatches = results[0] as List<TitleResult>;
-      _rawMatches = results[1] as List<LineResult>;
-      _applySort();
-      _isSearching = false;
-    });
   }
 
   void _openPoem({required int poemId, int? lineId}) {
@@ -177,57 +92,60 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.poet),
-        actions: [
-          PopupMenuButton<SearchSort>(
-            icon: const Icon(Icons.sort),
-            tooltip: 'ترتيب النتائج',
-            initialValue: _sortMode,
-            onSelected: _setSortMode,
-            itemBuilder: (_) => [
-              for (final sort in SearchSort.values)
-                CheckedPopupMenuItem(
-                  value: sort,
-                  checked: sort == _sortMode,
-                  child: Text(sort.label),
+    return ListenableBuilder(
+      listenable: _search,
+      builder: (context, _) => Scaffold(
+        appBar: AppBar(
+          title: Text(widget.poet),
+          actions: [
+            PopupMenuButton<SearchSort>(
+              icon: const Icon(Icons.sort),
+              tooltip: 'ترتيب النتائج',
+              initialValue: _search.sortMode,
+              onSelected: _search.setSortMode,
+              itemBuilder: (_) => [
+                for (final sort in SearchSort.values)
+                  CheckedPopupMenuItem(
+                    value: sort,
+                    checked: sort == _search.sortMode,
+                    child: Text(sort.label),
+                  ),
+              ],
+            ),
+            CommonAppBarActions(onOpenSettings: _openSettings),
+          ],
+        ),
+        body: FutureBuilder<List<Poem>>(
+          future: _poemsFuture,
+          builder: (context, snapshot) {
+            if (!snapshot.hasData) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            final poems = snapshot.data!;
+            return Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: SearchField(
+                    autofocus: false,
+                    hintText: 'ابحث في قصائد ${widget.poet}…',
+                    focusNode: _searchFocusNode,
+                    debounce: const Duration(seconds: 1),
+                    onChanged: _search.onQueryChanged,
+                    onSubmitted: _focusFirstResult,
+                  ),
                 ),
-            ],
-          ),
-          CommonAppBarActions(onOpenSettings: _openSettings),
-        ],
-      ),
-      body: FutureBuilder<List<Poem>>(
-        future: _poemsFuture,
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final poems = snapshot.data!;
-          return Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: SearchField(
-                  autofocus: false,
-                  hintText: 'ابحث في قصائد ${widget.poet}…',
-                  focusNode: _searchFocusNode,
-                  debounce: const Duration(seconds: 1),
-                  onChanged: _onQueryChanged,
-                  onSubmitted: _focusFirstResult,
+                Expanded(
+                  child: _search.query.isEmpty
+                      ? _buildPoemList(poems)
+                      : _search.isSearching
+                          ? const Center(child: CircularProgressIndicator())
+                          : _buildMatchList(),
                 ),
-              ),
-              Expanded(
-                child: _query.isEmpty
-                    ? _buildPoemList(poems)
-                    : _isSearching
-                        ? const Center(child: CircularProgressIndicator())
-                        : _buildMatchList(),
-              ),
-            ],
-          );
-        },
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -257,16 +175,18 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
   }
 
   Widget _buildMatchList() {
-    if (_titleMatches.isEmpty && _matches.isEmpty) {
+    final titleMatches = _search.sortedTitles;
+    final matches = _search.sortedLines;
+    if (titleMatches.isEmpty && matches.isEmpty) {
       return const Center(child: Text('لا توجد نتائج.'));
     }
 
     // Flattened item model so the results list builds lazily:
     // [titles header, title tiles…], then [lines header, line tiles…].
-    final hasTitles = _titleMatches.isNotEmpty;
-    final titleBlock = hasTitles ? 1 + _titleMatches.length : 0;
+    final hasTitles = titleMatches.isNotEmpty;
+    final titleBlock = hasTitles ? 1 + titleMatches.length : 0;
     final lineHeaderIndex = titleBlock;
-    final itemCount = lineHeaderIndex + 1 + _matches.length;
+    final itemCount = lineHeaderIndex + 1 + matches.length;
 
     return ListView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -274,10 +194,10 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
       itemBuilder: (context, index) {
         if (hasTitles && index < titleBlock) {
           if (index == 0) {
-            return SectionHeader('عناوين (${_titleMatches.length})');
+            return SectionHeader('عناوين (${titleMatches.length})');
           }
           final i = index - 1;
-          final match = _titleMatches[i];
+          final match = titleMatches[i];
           return Card(
             child: InkWell(
               focusNode: i == 0 ? _firstResultFocusNode : null,
@@ -305,10 +225,10 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
           );
         }
         if (index == lineHeaderIndex) {
-          return SectionHeader('أبيات (${_matches.length})');
+          return SectionHeader('أبيات (${matches.length})');
         }
         final i = index - lineHeaderIndex - 1;
-        final match = _matches[i];
+        final match = matches[i];
         return Card(
           child: InkWell(
             focusNode: (!hasTitles && i == 0) ? _firstResultFocusNode : null,
