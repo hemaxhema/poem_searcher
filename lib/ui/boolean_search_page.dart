@@ -135,6 +135,9 @@ class _BooleanSearchPageState extends State<BooleanSearchPage> {
                 autofocus: true,
                 minLines: 1,
                 maxLines: 3,
+                // Show a "search" action on the soft keyboard instead of the
+                // newline key a multiline field would otherwise default to.
+                textInputAction: TextInputAction.search,
                 onChanged: _onChanged,
                 onSubmitted: (_) => _submit(),
                 decoration: InputDecoration(

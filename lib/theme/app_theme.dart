@@ -12,7 +12,6 @@ class AppTheme {
   static const Color _nightHint = Color(0xFF9AA3C0);
 
   // Day palette - light, same boxed input style.
-  static const Color _dayBackground = Color.fromARGB(255, 177, 188, 230);
   static const Color _dayFieldFill = Color(0xFFEEF1F8);
   static const Color _dayBorder = Color(0xFFD7DBEA);
   static const Color _dayText = Color(0xFF1A1A2E);

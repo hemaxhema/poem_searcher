@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'db/poem_repository.dart';
@@ -13,6 +14,9 @@ import 'ui/home_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Lock the app to portrait by default; the poem detail page opts into
+  // landscape while it is on screen (see PoemDetailPage). No-op on desktop.
+  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   await AppFonts.discoverAndLoad();
   AppFonts.currentFamily.value =
       (await PoemDisplayPrefs.load()).fontFamily;

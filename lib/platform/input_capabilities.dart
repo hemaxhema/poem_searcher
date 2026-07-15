@@ -10,3 +10,8 @@ import 'dart:io';
 /// keyboard provides the native backspace/caret behaviour instead.
 bool get hasHardwareKeyboard =>
     Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+
+/// Whether the current platform has a device orientation worth toggling
+/// (Android/iOS). False on desktop, where `SystemChrome.setPreferredOrientations`
+/// is a no-op — so orientation controls are hidden there.
+bool get isMobilePlatform => Platform.isAndroid || Platform.isIOS;

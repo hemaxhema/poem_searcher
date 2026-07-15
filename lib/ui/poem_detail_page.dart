@@ -5,6 +5,7 @@ import '../controllers/poem_detail_controller.dart';
 import '../db/poem_repository.dart';
 import '../models/poem.dart';
 import '../models/poem_line.dart';
+import '../platform/input_capabilities.dart';
 import '../services/url_opener.dart';
 import '../widgets/common_app_bar_actions.dart';
 import '../widgets/global_control_shortcuts.dart';
@@ -63,15 +64,39 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
   /// Memoized kashida-justified display strings (see [KashidaDisplayCache]).
   final KashidaDisplayCache _kashidaCache = KashidaDisplayCache();
 
+  /// Whether the page is currently locked to landscape. Driven only by the
+  /// app-bar toggle (not the device sensor), so it works even when the phone's
+  /// system auto-rotate is off. The page always opens in portrait.
+  bool _isLandscape = false;
+
   @override
   void initState() {
     super.initState();
     _detail.load();
     _shortcuts.attach();
+    // The rest of the app is portrait-locked (see main). This page opens
+    // portrait too; the app-bar button switches it to landscape and back.
+    // No-op on desktop.
+    SystemChrome.setPreferredOrientations(const [DeviceOrientation.portraitUp]);
+  }
+
+  /// Toggles the page between a portrait lock and a landscape lock. Using
+  /// [SystemChrome.setPreferredOrientations] forces the choice regardless of
+  /// the OS auto-rotate setting.
+  void _toggleOrientation() {
+    setState(() => _isLandscape = !_isLandscape);
+    SystemChrome.setPreferredOrientations(_isLandscape
+        ? const [
+            DeviceOrientation.landscapeLeft,
+            DeviceOrientation.landscapeRight,
+          ]
+        : const [DeviceOrientation.portraitUp]);
   }
 
   @override
   void dispose() {
+    // Restore the app-wide portrait lock as we leave the page.
+    SystemChrome.setPreferredOrientations(const [DeviceOrientation.portraitUp]);
     _shortcuts.dispose();
     _detail.dispose();
     _scrollController.dispose();
@@ -132,6 +157,14 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
           appBar: AppBar(
             title: Text(poem?.title ?? 'القصيدة'),
             actions: [
+              if (isMobilePlatform)
+                IconButton(
+                  icon: Icon(_isLandscape
+                      ? Icons.stay_current_portrait
+                      : Icons.stay_current_landscape),
+                  tooltip: _isLandscape ? 'عرض عمودي' : 'عرض أفقي',
+                  onPressed: _toggleOrientation,
+                ),
               IconButton(
                 icon: const Icon(Icons.format_size),
                 tooltip: 'إعدادات العرض',
@@ -185,8 +218,13 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
             8 -
             8 -
             _BaytTile.reservedBadgeWidth;
-        final displayText =
+        // The verses may be rendered smaller than the requested size when the
+        // widest bayt would otherwise overflow (never larger — the chosen size
+        // is a cap); `fontSize` is that fitted size, shared by every tile.
+        final fitted =
             _kashidaCache.displayFor(lines, verseStyle, scaler, available);
+        final displayText = fitted.display;
+        final verseFontSize = fitted.fontSize;
         // SingleChildScrollView + Column (rather than a lazy ListView)
         // so every bayt is laid out up front; this lets
         // Scrollable.ensureVisible centre the searched line even when
@@ -211,7 +249,7 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
                   highlighted:
                       group.any((l) => l.id == widget.highlightLineId),
                   primary: group.first,
-                  fontSize: display.fontSize,
+                  fontSize: verseFontSize,
                   fontFamily: display.fontFamily,
                   lineSpacing: display.lineSpacing,
                   variants:
@@ -251,50 +289,41 @@ class _PoemHeader extends StatelessWidget {
       if ((poem.page ?? '').isNotEmpty) poem.page!,
       if ((poem.type ?? '').isNotEmpty) poem.type!,
     ];
-    // Align+min-sizing lets the card shrink to fit its content instead of
-    // always spanning the full row width, which otherwise left a large,
-    // pointless blank strip whenever the title/poet/chips were short.
-    return Align(
-      alignment: AlignmentDirectional.centerStart,
-      child: Card(
-        margin: const EdgeInsets.only(bottom: 8),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Flexible(
-                child: Text(
-                  poem.title,
-                  style: theme.textTheme.titleMedium
-                      ?.copyWith(fontWeight: FontWeight.bold),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Wrap(
-                alignment: WrapAlignment.start,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                spacing: 8,
-                runSpacing: 4,
-                children: [
-                  Text(
-                    poem.poet,
-                    style: theme.textTheme.bodyMedium
-                        ?.copyWith(color: theme.colorScheme.primary),
-                  ),
-                  for (final source in sources) _SourceChip(source: source),
-                  for (final c in chips)
-                    Chip(
-                      label: Text(c),
-                      visualDensity: VisualDensity.compact,
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                ],
+    // Title + poet + source/meta chips laid out on a single horizontal line
+    // that scrolls sideways when it is wider than the screen (rather than
+    // wrapping onto extra rows), keeping the header to one compact line.
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Text(
+              poem.title,
+              style: theme.textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              poem.poet,
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(color: theme.colorScheme.primary),
+            ),
+            for (final source in sources) ...[
+              const SizedBox(width: 8),
+              _SourceChip(source: source),
+            ],
+            for (final c in chips) ...[
+              const SizedBox(width: 8),
+              Chip(
+                label: Text(c),
+                visualDensity: VisualDensity.compact,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
             ],
-          ),
+          ],
         ),
       ),
     );

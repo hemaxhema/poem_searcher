@@ -58,38 +58,46 @@ class _SourceFilterDialogState extends State<_SourceFilterDialog> {
 
   @override
   Widget build(BuildContext context) {
+    // Cap to the screen so the dialog never overflows on a narrow phone: a
+    // finite width bounded by the dialog (never the old fixed 420 that spilled
+    // over small screens) and a height that scrolls internally when the list
+    // is taller than the space available.
+    final maxHeight = MediaQuery.sizeOf(context).height * 0.6;
     return AlertDialog(
       title: const Text('المصادر'),
-      content: SizedBox(
-        width: 420,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Padding(
-              padding: EdgeInsets.only(bottom: 8),
-              child: Text(
-                'حدد المصادر المراد البحث فيها، واسحبها لترتيب أولوية النتائج.',
+      content: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: 420, maxHeight: maxHeight),
+        child: SizedBox(
+          width: double.maxFinite,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Padding(
+                padding: EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'حدد المصادر المراد البحث فيها، واسحبها لترتيب أولوية النتائج.',
+                ),
               ),
-            ),
-            SizedBox(
-              height: Source.values.length * 72.0,
-              child: ReorderableListView(
-                onReorder: _reorder,
-                children: [
-                  for (final source in _order)
-                    CheckboxListTile(
-                      key: ValueKey(source),
-                      value: _included.contains(source),
-                      onChanged: (value) =>
-                          _setIncluded(source, value ?? false),
-                      controlAffinity: ListTileControlAffinity.leading,
-                      title: Text(source.displayName),
-                    ),
-                ],
+              Flexible(
+                child: ReorderableListView(
+                  shrinkWrap: true,
+                  onReorder: _reorder,
+                  children: [
+                    for (final source in _order)
+                      CheckboxListTile(
+                        key: ValueKey(source),
+                        value: _included.contains(source),
+                        onChanged: (value) =>
+                            _setIncluded(source, value ?? false),
+                        controlAffinity: ListTileControlAffinity.leading,
+                        title: Text(source.displayName),
+                      ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
       actions: [
