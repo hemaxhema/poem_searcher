@@ -58,8 +58,9 @@ flutter:
 flutter_launcher_icons:
   android: true
   ios: false
-  image_path: "assets/icon/app_icon.png"
-  # Adaptive icon for Android 8+: the app icon on a white background. The
-  # source PNG is 180x180, so it is upscaled — acceptable but slightly soft.
-  adaptive_icon_background: "#FFFFFF"
-  adaptive_icon_foreground: "assets/icon/app_icon.png"
+  image_path: "assets/icon/poem-searcher-2b-1024.png"
+  # Adaptive icon for Android 8+. The 1024x1024 source has transparent corners
+  # and a pale-blue (#B9D4E8) fill, so using that same colour as the adaptive
+  # background makes the masked corners seamless.
+  adaptive_icon_background: "#B9D4E8"
+  adaptive_icon_foreground: "assets/icon/poem-searcher-2b-1024.png"
