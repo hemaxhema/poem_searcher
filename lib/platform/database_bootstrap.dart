@@ -13,8 +13,10 @@ const String poemDbAssetPath = 'assets/database/DB_Poems.db';
 /// `bootstrap_selector.dart`, touching nothing else.
 abstract interface class DatabaseBootstrap {
   /// The sqflite-compatible factory every database open on this platform goes
-  /// through. Windows: `sqflite_common_ffi`'s [databaseFactoryFfi]. Android
-  /// (later): `package:sqflite`'s factory.
+  /// through. Both Windows and Android use `sqflite_common_ffi`'s
+  /// [databaseFactoryFfi] over the modern SQLite bundled by
+  /// `sqlite3_flutter_libs` — not the `sqflite` plugin, whose Android system
+  /// SQLite lacks the FTS5 module / trigram tokenizer the search index needs.
   DatabaseFactory get databaseFactory;
 
   /// Absolute path where the writable, indexed copy of the database lives.

@@ -23,9 +23,6 @@ dependencies:
   sqflite_common_ffi: ^2.3.3
   sqlite3_flutter_libs: ^0.5.24
 
-  # SQLite plugin factory on Android (unused on Windows).
-  sqflite: ^2.3.3
-
   # Writable app-support directory for the DB copy on Android.
   path_provider: ^2.1.4
 
