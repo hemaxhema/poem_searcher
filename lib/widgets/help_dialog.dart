@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../platform/input_capabilities.dart';
+
 /// Shows a dialog explaining the search syntax (special symbols, quoting,
 /// tashkeel matching) and keyboard shortcuts.
 void showHelpDialog(BuildContext context) {
@@ -293,45 +295,50 @@ void showHelpDialog(BuildContext context) {
                 body: 'زر الشمس/القمر بجانب زر الإعدادات في كل صفحة يبدّل '
                     'المظهر فورًا ويحفظ الاختيار.',
               ),
-              const Divider(),
-              const _HelpSectionHeader('اختصارات لوحة المفاتيح'),
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const _KeyChip('Ctrl+F'),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            'اضغط Ctrl+F في صفحات البحث (الرئيسية، الشعراء، '
-                            'قصائد الشاعر) للتركيز على مربع البحث مباشرة.',
-                            style: Theme.of(context).textTheme.bodyMedium,
+              // Keyboard shortcuts fire only on devices with a hardware
+              // keyboard (see [hasHardwareKeyboard]); hide this section on
+              // touch devices where Ctrl+F/Ctrl+E never trigger.
+              if (hasHardwareKeyboard) ...[
+                const Divider(),
+                const _HelpSectionHeader('اختصارات لوحة المفاتيح'),
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const _KeyChip('Ctrl+F'),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'اضغط Ctrl+F في صفحات البحث (الرئيسية، الشعراء، '
+                              'قصائد الشاعر) للتركيز على مربع البحث مباشرة.',
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const _KeyChip('Ctrl+E'),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            'اضغط Ctrl+E في الصفحة الرئيسية لفتح نافذة '
-                            'البحث المنطقي مباشرة.',
-                            style: Theme.of(context).textTheme.bodyMedium,
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const _KeyChip('Ctrl+E'),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'اضغط Ctrl+E في الصفحة الرئيسية لفتح نافذة '
+                              'البحث المنطقي مباشرة.',
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ],
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
         ),

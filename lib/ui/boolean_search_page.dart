@@ -39,11 +39,15 @@ class _BooleanSearchPageState extends State<BooleanSearchPage> {
   late final HarakaAwareBackspace _harakaBackspace;
   late BoolParseResult _parsed = parseBoolean(widget.initialExpression);
 
-  /// Ctrl+F works regardless of what (if anything) currently has keyboard
-  /// focus — see [GlobalControlShortcuts].
-  late final GlobalControlShortcuts _shortcuts = GlobalControlShortcuts(
-    bindings: {
+  /// Ctrl+F and Esc work regardless of what (if anything) currently has
+  /// keyboard focus — see [GlobalKeyboardShortcuts]. Esc cancels back to the
+  /// home page, leaving its current results untouched.
+  late final GlobalKeyboardShortcuts _shortcuts = GlobalKeyboardShortcuts(
+    controlBindings: {
       LogicalKeyboardKey.keyF: () => _focusNode.requestFocus(),
+    },
+    plainBindings: {
+      LogicalKeyboardKey.escape: () => Navigator.of(context).maybePop(),
     },
     isActive: () => mounted && (ModalRoute.of(context)?.isCurrent ?? true),
   );

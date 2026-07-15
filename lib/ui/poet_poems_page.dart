@@ -39,10 +39,15 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
   final FocusNode _searchFocusNode = FocusNode();
   final FocusNode _firstResultFocusNode = FocusNode();
 
+  /// Tracks the previous [PoemSearchController.isSearching] so we can detect
+  /// the moment a search finishes (true → false) and auto-focus its first
+  /// result — sort changes and pref reloads don't flip this flag.
+  bool _wasSearching = false;
+
   /// Ctrl+F works regardless of what (if anything) currently has keyboard
-  /// focus — see [GlobalControlShortcuts].
-  late final GlobalControlShortcuts _shortcuts = GlobalControlShortcuts(
-    bindings: {
+  /// focus — see [GlobalKeyboardShortcuts].
+  late final GlobalKeyboardShortcuts _shortcuts = GlobalKeyboardShortcuts(
+    controlBindings: {
       LogicalKeyboardKey.keyF: () => _searchFocusNode.requestFocus(),
     },
     isActive: () => mounted && (ModalRoute.of(context)?.isCurrent ?? true),
@@ -52,6 +57,7 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
   void initState() {
     super.initState();
     _shortcuts.attach();
+    _search.addListener(_onSearchStateChanged);
     _poemsFuture = widget.repo.poemsByPoet(widget.poet);
     _search.loadPrefs();
   }
@@ -68,10 +74,24 @@ class _PoetPoemsPageState extends State<PoetPoemsPage> {
   @override
   void dispose() {
     _shortcuts.dispose();
+    _search.removeListener(_onSearchStateChanged);
     _search.dispose();
     _searchFocusNode.dispose();
     _firstResultFocusNode.dispose();
     super.dispose();
+  }
+
+  /// When a search finishes (isSearching flips true → false), auto-select its
+  /// first result so the arrow keys navigate the list straight away (Down goes
+  /// to the second result).
+  void _onSearchStateChanged() {
+    final searching = _search.isSearching;
+    if (_wasSearching && !searching) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _focusFirstResult();
+      });
+    }
+    _wasSearching = searching;
   }
 
   void _focusFirstResult() {

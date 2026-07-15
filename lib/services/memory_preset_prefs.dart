@@ -4,15 +4,19 @@ import '../db/memory_preset.dart';
 
 /// Persists the user's chosen memory preset across app restarts.
 ///
-/// Stored as the [MemoryPreset.id] string; an unknown or absent value falls
-/// back to [MemoryPreset.balanced] (see [MemoryPreset.byId]).
+/// Stored as the [MemoryPreset.id] string; when nothing is saved it falls back
+/// to [MemoryPreset.defaultForPlatform] (mobile gets [MemoryPreset.low],
+/// desktop [MemoryPreset.balanced]).
 class MemoryPresetPrefs {
   static const _key = 'memory_preset';
 
-  /// Loads the saved preset, or [MemoryPreset.balanced] if none saved.
+  /// Loads the saved preset, or [MemoryPreset.defaultForPlatform] if none saved.
   static Future<MemoryPreset> load() async {
     final prefs = await SharedPreferences.getInstance();
-    return MemoryPreset.byId(prefs.getString(_key));
+    final saved = prefs.getString(_key);
+    return saved == null
+        ? MemoryPreset.defaultForPlatform
+        : MemoryPreset.byId(saved);
   }
 
   static Future<void> save(MemoryPreset preset) async {

@@ -7,6 +7,7 @@ import '../models/poem.dart';
 import '../models/poem_line.dart';
 import '../services/url_opener.dart';
 import '../widgets/common_app_bar_actions.dart';
+import '../widgets/global_control_shortcuts.dart';
 import '../widgets/poem_display_settings_dialog.dart';
 import 'kashida_display.dart';
 import 'settings_page.dart';
@@ -41,6 +42,16 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
 
   final ScrollController _scrollController = ScrollController();
 
+  /// Esc returns to the home page (with its results intact) regardless of what
+  /// has keyboard focus — see [GlobalKeyboardShortcuts]. Desktop-only; a no-op
+  /// on Android/iOS, where the system back button already does this.
+  late final GlobalKeyboardShortcuts _shortcuts = GlobalKeyboardShortcuts(
+    plainBindings: {
+      LogicalKeyboardKey.escape: () => Navigator.of(context).maybePop(),
+    },
+    isActive: () => mounted && (ModalRoute.of(context)?.isCurrent ?? true),
+  );
+
   /// Attached to the bayt tile matching [PoemDetailPage.highlightLineId] so it
   /// can be centred in the viewport once laid out (see [_maybeAutoScroll]).
   final GlobalKey _highlightKey = GlobalKey();
@@ -56,10 +67,12 @@ class _PoemDetailPageState extends State<PoemDetailPage> {
   void initState() {
     super.initState();
     _detail.load();
+    _shortcuts.attach();
   }
 
   @override
   void dispose() {
+    _shortcuts.dispose();
     _detail.dispose();
     _scrollController.dispose();
     super.dispose();

@@ -45,13 +45,19 @@ class _HomePageState extends State<HomePage> {
   final FocusNode _searchFocusNode = FocusNode();
   final FocusNode _firstResultFocusNode = FocusNode();
 
+  /// Tracks the previous [PoemSearchController.isSearching] so we can detect
+  /// the moment a search finishes (true → false) and auto-focus its first
+  /// result — sort changes and pref reloads don't flip this flag, so they
+  /// don't steal focus.
+  bool _wasSearching = false;
+
   /// Drives the results list so a page change can jump back to the top.
   final ScrollController _resultsController = ScrollController();
 
   /// Ctrl+F/Ctrl+E work regardless of what (if anything) currently has
-  /// keyboard focus — see [GlobalControlShortcuts].
-  late final GlobalControlShortcuts _shortcuts = GlobalControlShortcuts(
-    bindings: {
+  /// keyboard focus — see [GlobalKeyboardShortcuts].
+  late final GlobalKeyboardShortcuts _shortcuts = GlobalKeyboardShortcuts(
+    controlBindings: {
       LogicalKeyboardKey.keyF: () => _searchFocusNode.requestFocus(),
       LogicalKeyboardKey.keyE: () => _openBooleanSearch(),
     },
@@ -62,12 +68,14 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _shortcuts.attach();
+    _search.addListener(_onSearchStateChanged);
     _search.loadPrefs();
   }
 
   @override
   void dispose() {
     _shortcuts.dispose();
+    _search.removeListener(_onSearchStateChanged);
     _search.dispose();
     _searchFocusNode.dispose();
     _firstResultFocusNode.dispose();
@@ -104,6 +112,22 @@ class _HomePageState extends State<HomePage> {
     if (result == null || !mounted) return;
     setState(() => _searchFieldEpoch++); // reset the plain box text
     _search.runBooleanSearch(result.raw, result.expr);
+  }
+
+  /// When a search finishes (isSearching flips true → false), auto-select its
+  /// first result so the arrow keys navigate the list straight away (Down goes
+  /// to the second result). Covers both live plain-box searches and the
+  /// boolean search returning from its own window.
+  void _onSearchStateChanged() {
+    final searching = _search.isSearching;
+    if (_wasSearching && !searching) {
+      // The first tile mounts with its focus node during this frame's build;
+      // request focus after it so the node is actually attached.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _focusFirstResult();
+      });
+    }
+    _wasSearching = searching;
   }
 
   void _focusFirstResult() {

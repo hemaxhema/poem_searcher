@@ -27,9 +27,11 @@ class _PoetsPageState extends State<PoetsPage> {
   final FocusNode _searchFocusNode = FocusNode();
 
   /// Ctrl+F works regardless of what (if anything) currently has keyboard
-  /// focus — see [GlobalControlShortcuts].
-  late final GlobalControlShortcuts _shortcuts = GlobalControlShortcuts(
-    bindings: {LogicalKeyboardKey.keyF: () => _searchFocusNode.requestFocus()},
+  /// focus — see [GlobalKeyboardShortcuts].
+  late final GlobalKeyboardShortcuts _shortcuts = GlobalKeyboardShortcuts(
+    controlBindings: {
+      LogicalKeyboardKey.keyF: () => _searchFocusNode.requestFocus()
+    },
     isActive: () => mounted && (ModalRoute.of(context)?.isCurrent ?? true),
   );
 
